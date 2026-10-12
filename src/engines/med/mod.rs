@@ -1,5 +1,6 @@
 //! Profile for the MED engine as used by BLACKRAINBOW / 筆柿そふと from 2013
-//! on (催眠術3, 催眠術4, 催眠術 RE), whose scripts are packed in `md_scr.med`.
+//! on (催眠術3, 催眠術4, 催眠術 RE, WIZARDLINKS), whose scripts are packed in
+//! `md_scr.med`.
 //!
 //! The game splits a loaded script up in memory, so the scripts are read
 //! from the game's directory. What is read from memory is the VM state: the

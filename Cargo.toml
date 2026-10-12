@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 memchr = "2"
+miniz_oxide = "0.8"
 aes = "0.8"
 cbc = "0.1"
 encoding_rs = "0.8"

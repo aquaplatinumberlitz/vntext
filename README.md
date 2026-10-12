@@ -17,8 +17,9 @@ Chỉ chạy trên Linux. Dùng cá nhân, chưa công bố.
 | 家属～母と姉妹の嬌声, Shihai no Kyoudan (bản tiếng Anh) | BISHOP (BSXScript 3.2) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | 牝教師 3, 淫獄の放課後 1–2, 隷従の制服, Shihai no Kyoudan 2 (bản tiếng Anh) | BISHOP (BSXScript 3.3) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | 催眠術2, 催眠術2 URA | BLACKRAINBOW spt | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
-| 催眠術3, 催眠術4, 催眠術 RE | MED | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra |
+| 催眠術3, 催眠術4, 催眠術 RE, WIZARDLINKS | MED | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra |
 | 極限痴漢特異点 1, 2, 3, NEO và hai bản ハーレム | ArkEngine (Unity, Mono) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra; khung lựa chọn đã kiểm tra trên bản 3 |
+| 聖奴隷学園 1, 2, 3, Saimin Seishidou Secret Lesson (bản tiếng Anh) | YU-RIS (479, 488, 494) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | Game engine khác | chưa có profile | bất kỳ | Chỉ có chế độ quét chung, chưa dùng được (xem [Giới hạn](#giới-hạn)) |
 
 ## Dùng
@@ -63,11 +64,14 @@ src/
       mod.rs         Profile engine riêng của BISHOP (BSXScript)
       text.rs        Giải mã text của BISHOP (mã \n, \A, \B, ký tự riêng)
     med/
-      mod.rs         Profile engine MED (催眠術3, 4, RE)
+      mod.rs         Profile engine MED (催眠術3, 4, RE, WIZARDLINKS)
       text.rs        Dò khoá, giải mã script và text của MED
     spt/
       mod.rs         Profile engine cũ của BLACKRAINBOW (script .spt)
       text.rs        Giải mã text của spt
+    yuris/
+      mod.rs         Profile engine YU-RIS
+      text.rs        Gói YPF, script YSTB và cách dò khoá của YU-RIS
   translate.rs       Dịch qua Gemini API, có cache
   web.rs             Máy chủ trang web, đẩy sự kiện tới trình duyệt
   page.html          Trang hiển thị cho Yomitan
@@ -121,7 +125,7 @@ Profile spt (`engines/spt/`), cho 催眠術2 và 催眠術2 URA:
 
 Khi một profile cần file của game (gói script của spt, `bsxx.ini` của bishop), thư mục game được xác định bằng nơi chứa file exe đang được nạp vào process, rồi mới tới thư mục làm việc. Cách đầu không phụ thuộc launcher: dưới Wine, file exe hiện ra với đường dẫn thật trên Linux.
 
-Profile med (`engines/med/`), cho 催眠術3, 催眠術4 và 催眠術 RE:
+Profile med (`engines/med/`), cho 催眠術3, 催眠術4, 催眠術 RE và WIZARDLINKS:
 
 1. Gói script `md_scr.med` được đọc từ thư mục game, rồi tới các gói vá `md_scr2.med`... nếu có; script trong gói sau thay script trùng tên trong gói trước, như game làm. Mỗi file trong gói bị mã hoá bằng cách cộng từng byte với một khoá lặp lại; khoá được dò ra từ file `_VIEW`, vì 24 byte đầu của nó giống nhau ở mọi game dùng engine này.
 2. Mỗi script là một dãy lệnh (số dòng nguồn, độ dài, mã lệnh, tham số) rồi tới bảng chuỗi; lệnh mang số thứ tự của chuỗi. Một khung thoại là một chuỗi lệnh: có thể có tên người nói (`13`), rồi text (`1`) và xuống dòng (`0`), kết thúc bằng lệnh xoá khung (`4`).
@@ -143,6 +147,15 @@ Profile ark (`engines/ark/`), cho loạt 極限痴漢特異点 (Unity kiểu Mon
 5. Lựa chọn là một dãy `\MENU(số,"chữ",…)` kết thúc bằng `\MENUEND`. Menu không để lại text riêng trong đối tượng: text vẫn là của khung thoại đứng trước nó, còn bộ đếm dòng đã chuyển vào phạm vi menu. Nên khi số dòng của khung thoại không còn trong đối tượng mà có một số nằm trong phạm vi của menu ngay sau khung đó, tool coi là menu đang hiện.
 
 Toàn bộ thông tin lấy từ chính mã của game, dịch ngược từ `Assembly-CSharp.dll` bằng ILSpy.
+
+Profile yuris (`engines/yuris/`), cho các game YU-RIS (聖奴隷学園 1–3, Saimin Seishidou):
+
+1. Script đã biên dịch (`ystNNNNN.ybn`) nằm trong các gói `.ypf` của game. Một game có nhiều gói: gói gốc và các gói `update…`; script trong gói update thay script cùng tên trong gói trước.
+2. Mỗi script gồm bốn phần (lệnh, tham số, dữ liệu, số dòng nguồn), mỗi phần XOR với cùng một khoá 4 byte riêng của game. Ba byte cao của khoá lộ ra qua số dòng nguồn đầu tiên; byte thấp là giá trị duy nhất làm cho, trong mọi script, số dòng không giảm và mọi mã lệnh đều tồn tại.
+3. Text là các lệnh `WORD` nối tiếp, kết thúc bằng lệnh `RETURNCODE`, là chỗ script chờ người đọc. Tên người nói nằm đầu dòng dạng `【tên】`.
+4. Engine giữ script đang nạp ở dạng đã giải mã trong RAM. Với mỗi tác vụ chạy script, nó có một khối ngữ cảnh chứa số thứ tự lệnh kế tiếp, con trỏ tới phần dữ liệu và phần số dòng của script, và số hiệu script. Số thứ tự lệnh nằm trước một dãy con trỏ dài ba ô ở phiên bản engine cũ (479) và bốn ô ở phiên bản mới (494); tool thử cả hai chỗ và lấy chỗ chứa một số hợp lệ, vì chỗ còn lại là con trỏ. Tool tìm các script đang nạp qua chữ ký `YSTB`, rồi tìm cặp ô liền nhau trỏ tới hai phần đó của cùng một script. Chỉ ngữ cảnh của script có thoại được theo dõi; các script nội bộ của engine cũng chạy thành tác vụ nhưng không có text.
+
+Định dạng file lấy từ [shimamura-sakura/yuri](https://github.com/shimamura-sakura/yuri).
 
 **Quét chung** (`text.rs`, hàm `auto` trong `main.rs`) — đường dự phòng:
 
@@ -196,5 +209,6 @@ Engine đã nhận diện được trong `/mnt/evo860/HGAME/` (theo file đặc 
 - [crskycode/BSXScript_Tool](https://github.com/crskycode/BSXScript_Tool): công cụ xuất/nhập text của `bsxx.dat`; nguồn của định dạng BSXScript.
 - [GARbro, ArcMED.cs](https://github.com/morkt/GARbro/blob/master/ArcFormats/DxLib/ArcMED.cs): định dạng gói `.med`.
 - Bộ công cụ dịch cho engine MED (`MED.py`, `SCE.py`, không rõ tác giả): cách dò khoá và định dạng script.
+- [shimamura-sakura/yuri](https://github.com/shimamura-sakura/yuri): bộ dịch ngược và tài liệu định dạng của YU-RIS.
 - Bộ công cụ patch tiếng Anh cho 催眠術2 (`blackrb_spt.py`, không rõ tác giả): nguồn của định dạng gói `*_spt.dat` và file `.spt`.
 - [0xDC00/agent](https://github.com/0xDC00/agent): text hooker dùng Frida, điểm xuất phát của dự án.
