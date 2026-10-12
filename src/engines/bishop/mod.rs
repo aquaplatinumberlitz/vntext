@@ -164,8 +164,7 @@ impl Script {
 /// game keeps it in `bsxx.ini` in its directory: NUL-separated UTF-16 strings,
 /// the third being the given name and the fourth the family name.
 fn protagonist(p: &Proc) -> Option<(String, String)> {
-    let dir = std::fs::read_link(format!("/proc/{}/cwd", p.pid)).ok()?;
-    let raw = std::fs::read(dir.join("bsxx.ini")).ok()?;
+    let raw = std::fs::read(p.game_file(|name| name == "bsxx.ini")?).ok()?;
     let units: Vec<u16> = raw.chunks_exact(2).map(|u| u16::from_le_bytes([u[0], u[1]])).collect();
     let mut strings = units.split(|u| *u == 0).map(String::from_utf16_lossy);
     let given = strings.nth(2).filter(|s| !s.is_empty())?;

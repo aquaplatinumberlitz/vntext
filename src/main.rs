@@ -275,6 +275,10 @@ const CONTEXT: usize = 4;
 /// passage as the game reaches it.
 fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
     eprintln!("engine: {}, {} passages", engine.name(), engine.len());
+    if o.debug {
+        let dirs: Vec<String> = p.game_dirs().iter().map(|d| d.display().to_string()).collect();
+        eprintln!("\x1b[2m  game files are looked for in: {}\x1b[0m", dirs.join(", "));
+    }
     let hub = web::Hub::default();
     if o.web {
         match hub.serve(o.port) {

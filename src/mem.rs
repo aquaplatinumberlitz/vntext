@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io;
 use std::os::unix::fs::FileExt;
+use std::path::{Path, PathBuf};
 
 const PAGE: u64 = 4096;
 const CHUNK: usize = 8 << 20;
@@ -102,6 +103,32 @@ impl Proc {
             pid,
             mem: File::open(format!("/proc/{pid}/mem"))?,
             pagemap: File::open(format!("/proc/{pid}/pagemap"))?,
+        })
+    }
+
+    /// Directories the game's files are likely to be in, best guess first:
+    /// where the executables mapped into the process live, then the working
+    /// directory. The executable comes first because it does not depend on
+    /// how the game was launched; under Wine it shows up with its real path.
+    pub fn game_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        let exes = read_maps(self.pid).unwrap_or_default().into_iter().filter(|m| m.path.to_lowercase().ends_with(".exe"));
+        let cwd = fs::read_link(format!("/proc/{}/cwd", self.pid)).ok();
+        for dir in exes.filter_map(|m| Path::new(&m.path).parent().map(Path::to_path_buf)).chain(cwd) {
+            if !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+        dirs
+    }
+
+    /// The first file in the game's directories whose name (lowercased, as
+    /// Windows games are careless about case) satisfies `wanted`.
+    pub fn game_file(&self, wanted: impl Fn(&str) -> bool) -> Option<PathBuf> {
+        self.game_dirs().iter().find_map(|dir| {
+            let mut names: Vec<PathBuf> = fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).collect();
+            names.sort();
+            names.into_iter().find(|path| path.file_name().is_some_and(|n| wanted(&n.to_string_lossy().to_lowercase())))
         })
     }
 

@@ -83,23 +83,13 @@ impl Pack {
         (!messages.is_empty()).then_some(Pack { file, scripts, by_head, messages })
     }
 
-    /// Reads the script pack from the directory the game runs in.
+    /// Reads the script pack from the game's directory.
     fn find(p: &Proc) -> Option<Pack> {
-        let dir = std::fs::read_link(format!("/proc/{}/cwd", p.pid)).ok()?;
-        for entry in std::fs::read_dir(dir).ok()?.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.ends_with("_spt.dat") {
-                continue;
-            }
-            if let Some(pack) = std::fs::read(entry.path()).ok().and_then(|data| Pack::parse(name, &data)) {
-                return Some(pack);
-            }
-        }
-        None
+        let path = p.game_file(|name| name.ends_with("_spt.dat"))?;
+        let name = path.file_name()?.to_string_lossy().into_owned();
+        Pack::parse(name, &std::fs::read(path).ok()?)
     }
-}
 
-impl Pack {
     /// The passage on screen according to a VM state: the script header,
     /// then `INDEX_AT` bytes in the index of the command being executed. The
     /// VM rests on a message command for as long as the message is shown.
