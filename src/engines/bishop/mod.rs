@@ -15,6 +15,8 @@ use memchr::memmem;
 use super::{Cell, Engine, Passage, Position};
 use crate::mem::Proc;
 
+mod text;
+
 const SIGNATURE: &[u8] = b"BSXScript 3.";
 const SHOW_MESSAGE: u8 = 0x1D;
 /// Fewer messages than this and the "script" is something else.
@@ -156,36 +158,6 @@ impl Script {
             .collect();
         String::from_utf16_lossy(&units)
     }
-
-    /// Turns stored text into what the game shows. `\n` breaks the line for
-    /// the text box only, so it is dropped along with the indent after it;
-    /// `\b` and `\s` change the text size.
-    fn readable(&self, text: &str) -> String {
-        let mut out = String::with_capacity(text.len());
-        let mut chars = text.chars().peekable();
-        while let Some(c) = chars.next() {
-            match c {
-                '\\' => match chars.next() {
-                    Some('n') => while chars.next_if_eq(&'\u{3000}').is_some() {},
-                    Some('b' | 's') => {}
-                    Some('A') => out.push_str(&self.family),
-                    Some('B') => out.push_str(&self.given),
-                    Some(other) => out.extend(['\\', other]),
-                    None => out.push('\\'),
-                },
-                '\u{E000}' => out.push('♥'),
-                // Glyphs of the game's own font. Going by where they occur
-                // (U+E042 for あ, U+E0A2 for ア, ...) they are kana with a
-                // voicing mark; this is inferred, not documented.
-                '\u{E001}'..='\u{E0FF}' => {
-                    out.extend(char::from_u32(0x3000 + (c as u32 & 0xFF)));
-                    out.push('゛');
-                }
-                _ => out.push(c),
-            }
-        }
-        out
-    }
 }
 
 /// The protagonist's (family, given) name, which the player can change. The
@@ -217,8 +189,9 @@ impl Engine for Script {
     fn passage(&self, index: usize) -> Passage {
         let show = &self.shows[index];
         let raw = self.string(self.messages[show.message]);
-        let speaker = show.speaker.map(|s| self.readable(&self.string(self.names[s]))).filter(|s| !s.is_empty());
-        Passage { speaker, lines: vec![self.readable(&raw)], raw }
+        let readable = |stored: &str| text::readable(stored, &self.family, &self.given);
+        let speaker = show.speaker.map(|s| readable(&self.string(self.names[s]))).filter(|s| !s.is_empty());
+        Passage { speaker, lines: vec![readable(&raw)], raw }
     }
 
     /// The VM state does not move, so there is nothing more to find by
@@ -242,33 +215,5 @@ impl Engine for Script {
             return None;
         }
         self.by_start.get(&u32::from_le_bytes(cell)).copied()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn script() -> Script {
-        Script {
-            version: String::new(),
-            data: Vec::new(),
-            shows: Vec::new(),
-            by_start: HashMap::new(),
-            names: Vec::new(),
-            messages: Vec::new(),
-            vm: 0,
-            family: "金本".to_string(),
-            given: "一也".to_string(),
-        }
-    }
-
-    #[test]
-    fn readable_text() {
-        let s = script();
-        assert_eq!(s.readable("「あひィインッ\u{E000}　何これぇっ\u{E000}\\n　気持ちいい」"), "「あひィインッ♥　何これぇっ♥気持ちいい」");
-        assert_eq!(s.readable("\\b「\\A\\B君、\\n　ちょっといいかしら？」"), "「金本一也君、ちょっといいかしら？」");
-        assert_eq!(s.readable("\\B"), "一也");
-        assert_eq!(s.readable("\u{E042}あ"), "あ゛あ");
     }
 }

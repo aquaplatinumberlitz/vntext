@@ -53,7 +53,9 @@ src/
     shin/
       mod.rs         Profile engine Entergram shin
       text.rs        Giải mã text của shin (bảng ký tự, lệnh @)
-    bishop.rs        Profile engine riêng của BISHOP (BSXScript)
+    bishop/
+      mod.rs         Profile engine riêng của BISHOP (BSXScript)
+      text.rs        Giải mã text của BISHOP (mã \n, \A, \B, ký tự riêng)
   translate.rs       Dịch qua Gemini API, có cache
   web.rs             Máy chủ trang web, đẩy sự kiện tới trình duyệt
   page.html          Trang hiển thị cho Yomitan
@@ -88,7 +90,7 @@ Không phải ô nào khớp dạng cũng là ô thật. Game giữ các bản s
 
 Text của shin là Shift-JIS, trong đó hiragana và vài dấu câu được ghi bằng katakana nửa độ rộng một byte, xen với lệnh `@` (`@r` xuống dòng, `@k` chờ bấm, `@v` voice, `@c` màu, `@b…@<…@>` furigana, ...). `engines/shin/text.rs` chuyển về text đọc được. Bảng ký tự và cú pháp lệnh lấy từ [DCNick3/shin](https://github.com/DCNick3/shin) (MPL-2.0).
 
-Profile bishop (`engines/bishop.rs`), cho các game dùng `bsxx.dat`:
+Profile bishop (`engines/bishop/`), cho các game dùng `bsxx.dat`:
 
 1. Tìm chữ ký `BSXScript 3.` trong RAM, rồi tìm ô nhớ trỏ tới nó; ô kế tiếp là kích thước script. Cặp ô đó nằm trong khối trạng thái của máy ảo, ở vị trí cố định suốt lần chạy.
 2. Đọc script: bảng tên nhân vật, bảng câu thoại (UTF-16), và duyệt mã lệnh để lấy mọi lệnh "hiện câu thoại" (`0x1D`) theo thứ tự.
@@ -119,7 +121,7 @@ Dịch và trang web hiện chỉ nối với đường profile engine; chế đ
 
 ## Thêm engine mới
 
-Mỗi họ engine là một module trong `src/engines/`, cài đặt giao diện `Engine` (`engines/mod.rs`):
+Mỗi họ engine là một thư mục trong `src/engines/` với hai file: `mod.rs` (tìm kịch bản và theo dõi vị trí, cài đặt giao diện `Engine`) và `text.rs` (giải mã text của engine đó). Giao diện chung nằm ở `engines/mod.rs`:
 
 | Hàm | Việc |
 |---|---|
