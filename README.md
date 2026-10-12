@@ -119,14 +119,15 @@ Khi một profile cần file của game (gói script của spt, `bsxx.ini` của
 
 Profile med (`engines/med/`), cho 催眠術3, 催眠術4 và 催眠術 RE:
 
-1. Gói script `md_scr.med` được đọc từ thư mục game. Mỗi file trong gói bị mã hoá bằng cách cộng từng byte với một khoá lặp lại; khoá được dò ra từ file `_VIEW`, vì 24 byte đầu của nó giống nhau ở mọi game dùng engine này.
+1. Gói script `md_scr.med` được đọc từ thư mục game, rồi tới các gói vá `md_scr2.med`... nếu có; script trong gói sau thay script trùng tên trong gói trước, như game làm. Mỗi file trong gói bị mã hoá bằng cách cộng từng byte với một khoá lặp lại; khoá được dò ra từ file `_VIEW`, vì 24 byte đầu của nó giống nhau ở mọi game dùng engine này.
 2. Mỗi script là một dãy lệnh (số dòng nguồn, độ dài, mã lệnh, tham số) rồi tới bảng chuỗi; lệnh mang số thứ tự của chuỗi. Một khung thoại là một chuỗi lệnh: có thể có tên người nói (`13`), rồi text (`1`) và xuống dòng (`0`), kết thúc bằng lệnh xoá khung (`4`).
 3. Vị trí đang đọc lấy từ trạng thái máy ảo trong RAM, gồm (tính theo ô 32-bit): độ dài phần mã lệnh của script đang chạy, cách 4 ô là bộ đếm chương trình, cách 4 ô nữa là bản sao của bộ đếm, và ngay sau đó là con trỏ tới tên script. Tool tìm cụm này bằng cách quét bộ nhớ, rồi mỗi lần đọc lại tên script và bộ đếm.
 4. Bộ đếm trỏ tới lệnh kế tiếp; trong lúc một khung thoại hiện trên màn hình, máy ảo đứng ở lệnh xoá khung của nó.
+5. Lựa chọn: lệnh `33` mang danh sách vị trí của các lệnh `10`, mỗi lệnh `10` giữ chữ của một phương án. Tool gom chúng thành một khung riêng, người nói ghi là `選択肢`, mỗi phương án một dòng. Trong lúc chờ chọn, máy ảo đứng ở lệnh `33` hoặc lệnh ngay sau nó.
 
 Phải nhận diện script bằng tên: rất nhiều script trong cùng một game có phần mã lệnh mở đầu giống hệt nhau (ở 催眠術4, 339 script chỉ có 64 kiểu mở đầu khác nhau), nên so mã lệnh sẽ nhận nhầm.
 
-Định dạng gói lấy từ GARbro; cách dò khoá và định dạng script lấy từ một bộ công cụ dịch cho engine này (`MED.py`, `SCE.py`), không rõ tác giả. `＄０` trong text là tên nhân vật chính và hiện chưa được thay.
+Định dạng gói lấy từ GARbro; cách dò khoá và định dạng script lấy từ một bộ công cụ dịch cho engine này (`MED.py`, `SCE.py`), không rõ tác giả.
 
 **Quét chung** (`text.rs`, hàm `auto` trong `main.rs`) — đường dự phòng:
 

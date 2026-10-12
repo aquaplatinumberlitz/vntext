@@ -125,11 +125,25 @@ impl Proc {
     /// The first file in the game's directories whose name (lowercased, as
     /// Windows games are careless about case) satisfies `wanted`.
     pub fn game_file(&self, wanted: impl Fn(&str) -> bool) -> Option<PathBuf> {
-        self.game_dirs().iter().find_map(|dir| {
-            let mut names: Vec<PathBuf> = fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).collect();
-            names.sort();
-            names.into_iter().find(|path| path.file_name().is_some_and(|n| wanted(&n.to_string_lossy().to_lowercase())))
-        })
+        self.game_files(wanted).into_iter().next()
+    }
+
+    /// Every such file in the first of the game's directories that has any,
+    /// sorted by name.
+    pub fn game_files(&self, wanted: impl Fn(&str) -> bool) -> Vec<PathBuf> {
+        for dir in self.game_dirs() {
+            let Ok(entries) = fs::read_dir(&dir) else { continue };
+            let mut found: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|path| path.file_name().is_some_and(|n| wanted(&n.to_string_lossy().to_lowercase())))
+                .collect();
+            if !found.is_empty() {
+                found.sort();
+                return found;
+            }
+        }
+        Vec::new()
     }
 
     /// Reads as much of `buf` as possible at `addr`; returns the number of bytes read.

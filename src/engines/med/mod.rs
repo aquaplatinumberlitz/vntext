@@ -22,7 +22,11 @@ mod text;
 const NEWLINE: u8 = 0;
 const PRINT_TEXT: u8 = 1;
 const CLEAR_TEXT: u8 = 4;
+const CHOICE: u8 = 10;
 const PRINT_NAME: u8 = 13;
+const CHOICES: u8 = 33;
+/// Shown as the speaker of a passage that lists choices.
+const CHOICE_LABEL: &str = "選択肢";
 /// The VM state, in 32-bit cells: the length of the script's code at 0, the
 /// program counter at 4 and again at 8, a pointer to the script's name at 9.
 const COUNTER: usize = 4;
@@ -41,6 +45,7 @@ struct Script {
 
 struct Block {
     speaker: Option<String>,
+    /// one line, or for a menu of choices one line per choice
     text: String,
 }
 
@@ -116,6 +121,25 @@ impl Archive {
             if matches!(opcode, PRINT_NAME | PRINT_TEXT | NEWLINE | CLEAR_TEXT) && !(pending.is_empty() && opcode == NEWLINE) {
                 pending.push(offset);
             }
+            // A menu of choices: `FF FF, count: u8`, then for each choice the
+            // offset of its CHOICE instruction, which carries the text and is
+            // where the VM jumps when it is picked. While the menu is up the
+            // VM is on this instruction or the one after it.
+            if opcode == CHOICES {
+                let targets = (0..*data.get(at + 6)? as usize).filter_map(|i| half(data, at + 7 + 2 * i));
+                let options: Vec<&str> = targets
+                    .filter(|target| data.get(text::CLEAR + target + 3) == Some(&CHOICE))
+                    .filter_map(|target| half(data, text::CLEAR + target + 4).and_then(|i| strings.get(i)))
+                    .map(|option| option.trim())
+                    // menus of the system scripts have placeholders for text
+                    .filter(|option| option.chars().any(|c| !c.is_ascii()))
+                    .collect();
+                if !options.is_empty() {
+                    let after = offset + 3 + length as u32;
+                    script.passages.extend([(offset, self.blocks.len()), (after, self.blocks.len())]);
+                    self.blocks.push(Block { speaker: Some(CHOICE_LABEL.to_string()), text: options.join("\n") });
+                }
+            }
             if opcode == CLEAR_TEXT {
                 if !block.text.is_empty() {
                     script.passages.extend(pending.iter().map(|o| (*o, self.blocks.len())));
@@ -132,20 +156,31 @@ impl Archive {
         Some(())
     }
 
-    /// Reads the script archive from the game's directory.
+    /// Reads the script archives from the game's directory: `md_scr.med`,
+    /// and after it any `md_scr2.med` and so on, which a patch adds. A later
+    /// archive's scripts replace earlier ones of the same name, as they do
+    /// in the game. Only the first archive is sure to hold `_VIEW`, so its
+    /// key serves them all.
     fn find(p: &Proc) -> Option<Archive> {
-        let path = p.game_file(|name| name.ends_with("_scr.med"))?;
-        let data = std::fs::read(&path).ok()?;
-        let files = entries(&data)?;
-        let key = files.iter().find(|(name, _)| name.starts_with(text::KNOWN_NAME)).and_then(|(_, view)| text::recover_key(view))?;
-        let file = path.file_name()?.to_string_lossy().into_owned();
+        let is_archive = |name: &str| {
+            name.strip_suffix(".med").and_then(|stem| stem.trim_end_matches(|c: char| c.is_ascii_digit()).strip_suffix("_scr")).is_some()
+        };
+        let paths = p.game_files(is_archive);
+        let file = paths.first()?.file_name()?.to_string_lossy().into_owned();
         let mut archive =
             Archive { file, scripts: Vec::new(), by_name: HashMap::new(), code_lens: Default::default(), blocks: Vec::new() };
-        for (name, stored) in files {
-            let mut script = stored.to_vec();
-            text::decrypt(&mut script, &key);
-            // a file that does not parse is not a script; the rest still are
-            let _ = archive.add_script(&name, &script);
+        let mut key: Option<Vec<u8>> = None;
+        for path in paths {
+            let Ok(data) = std::fs::read(&path) else { continue };
+            let Some(files) = entries(&data) else { continue };
+            let own = files.iter().find(|(name, _)| name.starts_with(text::KNOWN_NAME)).and_then(|(_, view)| text::recover_key(view));
+            let Some(key) = own.or(key.clone()).inspect(|k| key = Some(k.clone())) else { continue };
+            for (name, stored) in files {
+                let mut script = stored.to_vec();
+                text::decrypt(&mut script, &key);
+                // a file that does not parse is not a script; the rest still are
+                let _ = archive.add_script(&name, &script);
+            }
         }
         (!archive.blocks.is_empty()).then_some(archive)
     }
@@ -176,7 +211,7 @@ impl Engine for Archive {
 
     fn passage(&self, index: usize) -> Passage {
         let block = &self.blocks[index];
-        Passage { speaker: block.speaker.clone(), lines: vec![block.text.clone()], raw: block.text.clone() }
+        Passage { speaker: block.speaker.clone(), lines: block.text.lines().map(str::to_string).collect(), raw: block.text.clone() }
     }
 
     /// Scans for the VM state. It is a fixed part of the program's data, so
