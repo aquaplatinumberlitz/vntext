@@ -29,7 +29,7 @@ usage:
   --all     also scan read-only memory
   --clip    copy each line to the clipboard (wl-copy)
 
-when the game's engine is recognised (currently: the Entergram shin engine), auto also takes:
+when the game's engine is recognised (Entergram shin, BISHOP BSXScript), auto also takes:
   --raw          print text as the engine stores it, control codes included
   --debug        log every change of the cells that hold a reading position
   --web          serve a live page for reading with Yomitan (http://127.0.0.1:8777)

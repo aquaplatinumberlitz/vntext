@@ -7,6 +7,7 @@
 
 use crate::mem::Proc;
 
+pub mod bishop;
 pub mod shin;
 
 /// One unit of text as the game shows it: a few sentences, usually by one speaker.
@@ -58,7 +59,7 @@ pub trait Engine: Send + Sync {
 
 type Detector = fn(&Proc) -> Option<Box<dyn Engine>>;
 
-const DETECTORS: &[Detector] = &[shin::detect];
+const DETECTORS: &[Detector] = &[shin::detect, bishop::detect];
 
 /// Returns the profile of the first engine recognised in the process.
 pub fn detect(p: &Proc) -> Option<Box<dyn Engine>> {

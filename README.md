@@ -12,8 +12,9 @@ Chỉ chạy trên Linux. Dùng cá nhân, chưa công bố.
 |---|---|---|---|
 | Umineko no Naku Koro ni Saku | Entergram shin | Switch, Ryujinx 1.3.3 | Chính xác từng đoạn, đã kiểm tra |
 | Higurashi no Naku Koro ni Hou | Entergram shin | Switch, Ryujinx 1.3.3 | Chính xác từng đoạn, đã kiểm tra |
+| 牝教師4 | BISHOP (BSXScript 3.1) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
+| Các game BISHOP khác trong `HGAME` | BISHOP (BSXScript 3.0–3.3) | Windows, Proton-GE | Script trên đĩa của cả 11 game đọc được; các game đã chạy thử đều đúng (chưa ghi lại cụ thể game nào) |
 | Game engine khác | chưa có profile | bất kỳ | Chỉ có chế độ quét chung, chưa dùng được (xem [Giới hạn](#giới-hạn)) |
-| Game Windows qua Wine/Proton | — | — | Chưa thử lần nào |
 
 ## Dùng
 
@@ -50,6 +51,7 @@ src/
     shin/
       mod.rs         Profile engine Entergram shin
       text.rs        Giải mã text của shin (bảng ký tự, lệnh @)
+    bishop.rs        Profile engine riêng của BISHOP (BSXScript)
   translate.rs       Dịch qua Gemini API, có cache
   web.rs             Máy chủ trang web, đẩy sự kiện tới trình duyệt
   page.html          Trang hiển thị cho Yomitan
@@ -69,7 +71,7 @@ Tool gồm ba tầng. Chỉ tầng giữa phụ thuộc engine.
 
 Có hai đường, `auto` tự chọn.
 
-**Profile engine** (`engines/`) — đường chính xác. Hiện có một profile, shin:
+**Profile engine** (`engines/`) — đường chính xác. Profile shin:
 
 1. Tìm file kịch bản trong RAM qua chữ ký `SNR `, đọc cả file.
 2. Tách mọi lệnh thoại `MSGSET` (opcode `0x86`), kiểm tra bằng việc số thứ tự thoại phải liên tiếp. Bố cục lệnh lệch nhau giữa các game: bảng `LAYOUTS` liệt kê các kiểu đã biết (Umineko 7 byte đầu, Higurashi 8), tool thử hết và giữ kiểu đọc ra nhiều đoạn hơn.
@@ -83,6 +85,15 @@ Không phải ô nào khớp dạng cũng là ô thật. Game giữ các bản s
 - Ô ở chỗ khác chỉ được tin khi nó tiến từng bước nhỏ về phía trước hai lần liên tiếp, như một người đang đọc. Một phần mười số lần tìm là quét kỹ để thấy các ô loại này.
 
 Text của shin là Shift-JIS, trong đó hiragana và vài dấu câu được ghi bằng katakana nửa độ rộng một byte, xen với lệnh `@` (`@r` xuống dòng, `@k` chờ bấm, `@v` voice, `@c` màu, `@b…@<…@>` furigana, ...). `engines/shin/text.rs` chuyển về text đọc được. Bảng ký tự và cú pháp lệnh lấy từ [DCNick3/shin](https://github.com/DCNick3/shin) (MPL-2.0).
+
+Profile bishop (`engines/bishop.rs`), cho các game dùng `bsxx.dat`:
+
+1. Tìm chữ ký `BSXScript 3.` trong RAM, rồi tìm ô nhớ trỏ tới nó; ô kế tiếp là kích thước script. Cặp ô đó nằm trong khối trạng thái của máy ảo, ở vị trí cố định suốt lần chạy.
+2. Đọc script: bảng tên nhân vật, bảng câu thoại (UTF-16), và duyệt mã lệnh để lấy mọi lệnh "hiện câu thoại" (`0x1D`) theo thứ tự.
+3. Trong khối trạng thái, ô vị trí là ô chứa điểm đầu của một lệnh hiện thoại, khi một ô gần đó chứa điểm cuối của chính lệnh ấy.
+4. Giải mã text: `\n` là xuống dòng trong khung thoại (bỏ), `\b` và `\s` đổi cỡ chữ (bỏ), `\A` và `\B` là họ và tên nhân vật chính (đọc từ `bsxx.ini` trong thư mục game), `U+E000` là dấu ♥. Các ký tự `U+E0xx` khác được suy đoán là kana có dấu đục.
+
+Định dạng file và độ dài lệnh lấy từ [crskycode/BSXScript_Tool](https://github.com/crskycode/BSXScript_Tool).
 
 **Quét chung** (`text.rs`, hàm `auto` trong `main.rs`) — đường dự phòng:
 
@@ -133,4 +144,5 @@ Engine đã nhận diện được trong `/mnt/evo860/HGAME/` (theo file đặc 
 ## Nguồn tham khảo
 
 - [DCNick3/shin](https://github.com/DCNick3/shin): bản viết lại engine Entergram; nguồn của định dạng SNR, bảng ký tự và cú pháp lệnh.
+- [crskycode/BSXScript_Tool](https://github.com/crskycode/BSXScript_Tool): công cụ xuất/nhập text của `bsxx.dat`; nguồn của định dạng BSXScript.
 - [0xDC00/agent](https://github.com/0xDC00/agent): text hooker dùng Frida, điểm xuất phát của dự án.
