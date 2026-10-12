@@ -72,8 +72,9 @@ pub fn is_japanese(text: &str, enc: Enc, cfg: &Cfg) -> bool {
     let (mut prev_kana, mut pair) = (false, false);
     for c in text.chars().filter(|c| !c.is_whitespace()) {
         n += 1;
-        // half-width kana only count in UTF-8: in UTF-16 any xx FF pair looks like one
-        let k = is_kana(c) || (enc == Enc::Utf8 && crate::clean::is_half_kana(c));
+        // Some engines write kana half-width. They only count in UTF-8: in
+        // UTF-16 any xx FF byte pair looks like one.
+        let k = is_kana(c) || (enc == Enc::Utf8 && matches!(c, '\u{FF61}'..='\u{FF9F}'));
         // real sentences have kana next to kana; noise alternates blocks
         pair |= k && prev_kana;
         prev_kana = k || c == 'ー';

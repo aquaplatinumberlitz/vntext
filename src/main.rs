@@ -1,6 +1,5 @@
-mod clean;
+mod engines;
 mod mem;
-mod shin;
 mod text;
 mod translate;
 mod web;
@@ -13,6 +12,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use engines::Engine;
 use mem::Proc;
 use text::{Cfg, Enc, Hit};
 
@@ -28,9 +28,9 @@ usage:
   --min N   minimum characters per string (default 4)
   --all     also scan read-only memory
   --clip    copy each line to the clipboard (wl-copy)
-  --raw     print text as stored, without removing control codes
 
 when the game's engine is recognised (currently: the Entergram shin engine), auto also takes:
+  --raw          print text as the engine stores it, control codes included
   --web          serve a live page for reading with Yomitan (http://127.0.0.1:8777)
   --port N       port for --web
   --translate    translate each message with the Gemini API (needs GEMINI_API_KEY)
@@ -115,8 +115,8 @@ fn main() {
         ["auto", target] => {
             let p = open(target);
             eprintln!("scanning...");
-            match shin::Script::find(&p) {
-                Some(script) => follow_script(p, script, &o),
+            match engines::detect(&p) {
+                Some(engine) => follow(p, engine.into(), &o),
                 None => auto(p, cfg, &o),
             }
         }
@@ -144,8 +144,7 @@ fn strings(p: Proc, cfg: Cfg, o: &Opts) {
     let mut out = std::io::stdout().lock();
     for h in &hits {
         if seen.insert(h.text.as_str()) {
-            let shown = if o.raw { h.text.clone() } else { clean::clean(&h.text) };
-            let _ = writeln!(out, "{:012x} {:5} {}", h.addr, h.enc.name(), shown.replace('\n', "\\n"));
+            let _ = writeln!(out, "{:012x} {:5} {}", h.addr, h.enc.name(), h.text.replace('\n', "\\n"));
         }
     }
     eprintln!(
@@ -185,7 +184,6 @@ fn read_text(p: &Proc, addr: u64, enc: Enc, buf: &mut [u8]) -> Option<String> {
 
 struct Printer {
     clip: bool,
-    raw: bool,
     recent: VecDeque<(String, Instant)>,
 }
 
@@ -207,15 +205,11 @@ impl Printer {
         if self.recent.len() > HISTORY {
             self.recent.pop_front();
         }
-        let shown = if self.raw { text.replace('\n', " ") } else { clean::clean(text) };
-        if shown.is_empty() {
-            return;
-        }
-        eprintln!("\x1b[2m[{} {addr:x}{tag}]\x1b[0m", enc.name());
-        println!("{shown}");
+        eprint!("\x1b[2m[{} {addr:x}{tag}]\x1b[0m ", enc.name());
+        println!("{}", text.replace('\n', " "));
         let _ = std::io::stdout().flush();
         if self.clip {
-            let _ = Command::new("wl-copy").arg("--").arg(&shown).status();
+            let _ = Command::new("wl-copy").arg("--").arg(text).status();
         }
     }
 }
@@ -230,7 +224,7 @@ struct Track {
 }
 
 fn watch(p: Proc, addr: u64, enc: Enc, o: &Opts) {
-    let mut out = Printer { clip: o.clip, raw: o.raw, recent: VecDeque::new() };
+    let mut out = Printer { clip: o.clip, recent: VecDeque::new() };
     let mut t = Track { addr, enc, text: String::new(), since: Instant::now(), printed: String::new(), strikes: 0 };
     let mut buf = vec![0u8; READ_LEN];
     loop {
@@ -255,20 +249,22 @@ fn poll(p: &Proc, t: &mut Track, buf: &mut [u8]) -> bool {
     std::path::Path::new(&format!("/proc/{}", p.pid)).exists()
 }
 
-/// No new message for this long: look for the VM's position cells again
-/// (they move when the game rebuilds its script VM, e.g. back at the title).
-const RELOCATE_AFTER: Duration = Duration::from_secs(15);
-/// Upcoming messages translated together with the current one, so that they
+/// With no new passage for this long, the game's reading position is located
+/// again in the background: it moves when a save is loaded or the game
+/// returns to the title. The wait doubles up to the maximum while the reader
+/// stays on one passage, so a slow reader does not cause constant rescans.
+const RELOCATE_FIRST: Duration = Duration::from_secs(3);
+const RELOCATE_MAX: Duration = Duration::from_secs(30);
+/// Upcoming passages translated together with the current one, so that they
 /// are already cached when the reader gets there.
 const LOOKAHEAD: usize = 8;
-/// Earlier messages sent along for the model's reference.
+/// Earlier passages sent along for the model's reference.
 const CONTEXT: usize = 4;
 
-/// Engine-profile mode: the scenario is in memory, so follow the script VM's
-/// position and print each message as the game reaches it.
-fn follow_script(p: Proc, script: shin::Script, o: &Opts) {
-    eprintln!("shin engine scenario found: {} messages", script.messages.len());
-    let script = Arc::new(script);
+/// Engine-profile mode: follow the game's reading position and print each
+/// passage as the game reaches it.
+fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
+    eprintln!("engine: {}, {} passages", engine.name(), engine.len());
     let hub = web::Hub::default();
     if o.web {
         match hub.serve(o.port) {
@@ -280,17 +276,20 @@ fn follow_script(p: Proc, script: shin::Script, o: &Opts) {
         let translator = translate::Translator::new(&o.to, o.model.clone()).unwrap_or_else(|e| die(&e));
         eprintln!("translating with {}", translator.model);
         let (tx, rx) = mpsc::channel();
-        let (script, hub) = (script.clone(), hub.clone());
-        thread::spawn(move || translator_worker(translator, script, hub, rx));
+        let (engine, hub) = (engine.clone(), hub.clone());
+        thread::spawn(move || translator_worker(translator, engine, hub, rx));
         tx
     });
 
-    let mut cursors = script.locate_cursors(&p);
-    match cursors.first() {
-        Some(c) => eprintln!("following script position at {c:x}"),
-        None => eprintln!("waiting for the game to show a message..."),
+    let mut position = engine.locate(&p);
+    match position.cells.first() {
+        Some(c) => eprintln!("following reading position at {c:x}"),
+        None => eprintln!("waiting for the game to show text..."),
     }
-    let mut relocating: Option<Receiver<Vec<u64>>> = None;
+    // last reading of every cell: the live one is told apart by the fact that it moves
+    let mut readings: HashMap<u64, Option<usize>> = HashMap::new();
+    let mut relocating: Option<Receiver<engines::Position>> = None;
+    let mut retry = RELOCATE_FIRST;
     let mut changed = Instant::now();
     let mut last = None;
     let mut seq = 0u64;
@@ -298,27 +297,36 @@ fn follow_script(p: Proc, script: shin::Script, o: &Opts) {
         if !std::path::Path::new(&format!("/proc/{}", p.pid)).exists() {
             die("target process is gone");
         }
-        let current = cursors.iter().find_map(|c| script.message_at(&p, *c));
-        if let Some(index) = current.filter(|i| last != Some(*i)) {
+        let mut next = None;
+        for (rank, cell) in position.cells.iter().enumerate() {
+            let now = engine.read(&p, *cell);
+            match readings.insert(*cell, now) {
+                Some(before) if before != now => next = now.or(next),
+                // nothing to compare with yet: believe the most trustworthy cell
+                None if rank == 0 => next = now.or(next),
+                _ => {}
+            }
+        }
+        if let Some(index) = next.filter(|i| last != Some(*i)) {
             last = Some(index);
             changed = Instant::now();
+            retry = RELOCATE_FIRST;
             seq += 1;
-            let message = &script.messages[index];
-            let (name, lines) = message.parts();
+            let passage = engine.passage(index);
             eprintln!("\x1b[2m[#{index}]\x1b[0m");
             if o.raw {
-                println!("{}", message.text);
+                println!("{}", passage.raw);
             } else {
-                name.iter().chain(&lines).for_each(|l| println!("{l}"));
+                passage.speaker.iter().chain(&passage.lines).for_each(|l| println!("{l}"));
             }
             let _ = std::io::stdout().flush();
             if o.clip {
-                let _ = Command::new("wl-copy").arg("--").arg(lines.join("\n")).status();
+                let _ = Command::new("wl-copy").arg("--").arg(passage.lines.join("\n")).status();
             }
             hub.publish(
                 serde_json::json!({
                     "type": "message", "seq": seq, "index": index,
-                    "name": name, "lines": lines, "translating": jobs.is_some(),
+                    "name": passage.speaker, "lines": passage.lines, "translating": jobs.is_some(),
                 })
                 .to_string(),
             );
@@ -328,22 +336,27 @@ fn follow_script(p: Proc, script: shin::Script, o: &Opts) {
         }
 
         match relocating.as_ref().map(|rx| rx.try_recv()) {
-            Some(Ok(found)) => {
+            Some(Ok(mut found)) => {
                 relocating = None;
                 changed = Instant::now();
-                if !found.is_empty() && !cursors.iter().any(|c| found.contains(c)) {
-                    eprintln!("following script position at {:x}", found[0]);
-                    cursors = found;
+                retry = (retry * 2).min(RELOCATE_MAX);
+                // keep cells that no longer match: they may only be between passages
+                let kept: Vec<u64> = position.cells.iter().copied().filter(|c| !found.cells.contains(c)).collect();
+                found.cells.extend(kept);
+                if found.cells.first() != position.cells.first() {
+                    eprintln!("following reading position at {:x}", found.cells[0]);
+                    readings.remove(&found.cells[0]);
                 }
+                position = found;
             }
             Some(Err(TryRecvError::Disconnected)) => relocating = None,
             Some(Err(TryRecvError::Empty)) => {}
-            None if cursors.is_empty() || changed.elapsed() >= RELOCATE_AFTER => {
+            None if changed.elapsed() >= retry => {
                 let (tx, rx) = mpsc::channel();
-                let (script, pid) = (script.clone(), p.pid);
+                let (engine, pid) = (engine.clone(), p.pid);
                 thread::spawn(move || {
                     if let Ok(p) = Proc::open(pid) {
-                        let _ = tx.send(script.locate_cursors(&p));
+                        let _ = tx.send(engine.locate(&p));
                     }
                 });
                 relocating = Some(rx);
@@ -354,13 +367,13 @@ fn follow_script(p: Proc, script: shin::Script, o: &Opts) {
     }
 }
 
-/// Translates messages as they are shown, off the polling thread. A message
+/// Translates passages as they are shown, off the polling thread. A passage
 /// (a few sentences by one speaker) is translated as a whole: the sentences
 /// lean on each other too much to be translated one at a time.
-fn translator_worker(mut t: translate::Translator, script: Arc<shin::Script>, hub: web::Hub, jobs: Receiver<(u64, usize)>) {
+fn translator_worker(mut t: translate::Translator, engine: Arc<dyn Engine>, hub: web::Hub, jobs: Receiver<(u64, usize)>) {
     let unit = |index: usize| {
-        let (speaker, lines) = script.messages[index].parts();
-        translate::Line { speaker, text: lines.join("\n") }
+        let passage = engine.passage(index);
+        translate::Line { speaker: passage.speaker, text: passage.lines.join("\n") }
     };
     while let Ok(mut job) = jobs.recv() {
         // when the reader is skipping ahead, only the newest message matters
@@ -373,7 +386,7 @@ fn translator_worker(mut t: translate::Translator, script: Arc<shin::Script>, hu
             let current = unit(index).text;
             if t.cached(&current).is_none() {
                 let context: Vec<String> = (index.saturating_sub(CONTEXT)..index).map(|i| unit(i).text).collect();
-                let upcoming = (index..script.messages.len().min(index + 1 + LOOKAHEAD)).map(unit);
+                let upcoming = (index..engine.len().min(index + 1 + LOOKAHEAD)).map(unit);
                 let batch: Vec<translate::Line> = upcoming.filter(|l| t.cached(&l.text).is_none()).collect();
                 if let Err(e) = t.translate(&context, &batch) {
                     eprintln!("\x1b[33mtranslation failed: {e}\x1b[0m");
@@ -416,7 +429,7 @@ fn auto(p: Proc, cfg: Cfg, o: &Opts) {
         }
     });
 
-    let mut out = Printer { clip: o.clip, raw: o.raw, recent: VecDeque::new() };
+    let mut out = Printer { clip: o.clip, recent: VecDeque::new() };
     let mut seen: HashSet<String> = HashSet::new();
     let mut last: HashMap<(u64, Enc), u64> = HashMap::new();
     let mut baseline = true;

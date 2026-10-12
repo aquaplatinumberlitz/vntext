@@ -1,4 +1,4 @@
-//! Engine profile for Entergram's "shin" engine (Umineko Saku, Higurashi Hou, ...).
+//! Profile for Entergram's "shin" engine (Umineko Saku, Higurashi Hou, ...).
 //!
 //! The engine keeps the whole scenario file (SNR) in memory and its script VM
 //! keeps the offset of the instruction it is executing. With both located,
@@ -12,26 +12,42 @@ use std::collections::HashMap;
 use encoding_rs::SHIFT_JIS;
 use memchr::memmem;
 
-use crate::clean::clean;
+use super::{Engine, Passage, Position};
 use crate::mem::Proc;
+use text::clean;
+
+mod text;
 
 const MAGIC: &[u8] = b"SNR ";
 const MSGSET: u8 = 0x86;
 /// Fewer messages than this and the "scenario" is something else.
 const MIN_MESSAGES: usize = 50;
 
-pub struct Message {
+/// A MSGSET instruction is `86 | id: u24 | wait: u8 | ... | len: u16 | text`,
+/// with `len` counting the terminating NUL. How many bytes come before the
+/// text differs between versions of the engine; add a row for a new game.
+struct Layout {
+    game: &'static str,
+    head_len: usize,
+}
+
+const LAYOUTS: &[Layout] = &[
+    Layout { game: "Umineko Saku", head_len: 7 },
+    Layout { game: "Higurashi Hou", head_len: 8 },
+];
+
+struct Message {
     /// offsets of the MSGSET instruction inside the scenario
-    pub start: u32,
-    pub end: u32,
+    start: u32,
+    end: u32,
     /// text as stored: `@` commands and half-width kana included
-    pub text: String,
+    text: String,
 }
 
 impl Message {
     /// Speaker name (absent for narration) and the readable text of each
     /// section; the game reveals one section per click (`@k`).
-    pub fn parts(&self) -> (Option<String>, Vec<String>) {
+    fn parts(&self) -> (Option<String>, Vec<String>) {
         let (name, body) = self.text.split_once("@r").unwrap_or(("", &self.text));
         let name = clean(name);
         let sections = body.split("@k").map(clean).filter(|s| !s.is_empty()).collect();
@@ -40,14 +56,15 @@ impl Message {
 }
 
 pub struct Script {
-    pub messages: Vec<Message>,
+    messages: Vec<Message>,
     by_start: HashMap<u32, usize>,
     size: usize,
+    layout: &'static Layout,
 }
 
 /// Message text is Shift-JIS in which single bytes A0..DF stand for the
 /// engine's own shorthand; they are mapped to the code points that
-/// `clean::clean` expects (U+F8F0 and half-width katakana).
+/// `text::clean` expects (U+F8F0 and half-width katakana).
 fn decode(bytes: &[u8]) -> Option<String> {
     let mut out = String::with_capacity(bytes.len() * 2);
     let mut i = 0;
@@ -69,17 +86,16 @@ fn decode(bytes: &[u8]) -> Option<String> {
 }
 
 impl Script {
-    /// Picks the messages out of a scenario image. A MSGSET instruction is
-    /// `86 | id: u24 | wait: u8 | len: u16 | text` with `len` counting the
-    /// terminating NUL; some versions of the engine (Higurashi Hou) have one
-    /// more byte before `len`. Message ids are consecutive, which is what
-    /// separates real instructions from bytes that merely look like one.
+    /// Picks the messages out of a scenario image, trying every known layout
+    /// and keeping the one that reads the most messages.
     fn parse(data: &[u8]) -> Script {
-        let by_layout = [7, 8].map(|head_len| Script::parse_with(data, head_len));
-        by_layout.into_iter().max_by_key(|s| s.messages.len()).unwrap()
+        LAYOUTS.iter().map(|layout| Script::parse_with(data, layout)).max_by_key(|s| s.messages.len()).unwrap()
     }
 
-    fn parse_with(data: &[u8], head_len: usize) -> Script {
+    /// Message ids are consecutive, which is what separates real instructions
+    /// from bytes that merely look like one.
+    fn parse_with(data: &[u8], layout: &'static Layout) -> Script {
+        let head_len = layout.head_len;
         let mut found: Vec<(u32, Message)> = Vec::new();
         let mut i = 0;
         while let Some(k) = memchr::memchr(MSGSET, &data[i..]) {
@@ -101,11 +117,11 @@ impl Script {
             .collect();
         let messages: Vec<Message> = found.into_iter().zip(consecutive).filter(|(_, ok)| *ok).map(|((_, m), _)| m).collect();
         let by_start = messages.iter().enumerate().map(|(k, m)| (m.start, k)).collect();
-        Script { messages, by_start, size: data.len() }
+        Script { messages, by_start, size: data.len(), layout }
     }
 
     /// Looks for a loaded scenario in the target process.
-    pub fn find(p: &Proc) -> Option<Script> {
+    fn find(p: &Proc) -> Option<Script> {
         let finder = memmem::Finder::new(MAGIC);
         let mut candidates = Vec::new();
         p.scan(false, |base, data, limit, _| {
@@ -136,7 +152,7 @@ impl Script {
     /// of a MSGSET instruction with, 8 bytes before it, the offset just past
     /// that same instruction (the VM's program counter while it waits on the
     /// message). The pairing makes accidental matches practically impossible.
-    pub fn locate_cursors(&self, p: &Proc) -> Vec<u64> {
+    fn locate_cursors(&self, p: &Proc) -> Vec<u64> {
         let mut is_start = vec![0u64; self.size / 64 + 1];
         for m in &self.messages {
             is_start[m.start as usize / 64] |= 1 << (m.start % 64);
@@ -159,12 +175,44 @@ impl Script {
     }
 
     /// The message a position cell currently points at, if any.
-    pub fn message_at(&self, p: &Proc, cursor: u64) -> Option<usize> {
+    fn message_at(&self, p: &Proc, cursor: u64) -> Option<usize> {
         let mut cell = [0u8; 4];
         if p.read(cursor, &mut cell) != 4 {
             return None;
         }
         self.by_start.get(&u32::from_le_bytes(cell)).copied()
+    }
+}
+
+pub fn detect(p: &Proc) -> Option<Box<dyn Engine>> {
+    Script::find(p).map(|script| Box::new(script) as Box<dyn Engine>)
+}
+
+impl Engine for Script {
+    fn name(&self) -> String {
+        format!("shin ({} layout)", self.layout.game)
+    }
+
+    fn len(&self) -> usize {
+        self.messages.len()
+    }
+
+    fn passage(&self, index: usize) -> Passage {
+        let message = &self.messages[index];
+        let (speaker, lines) = message.parts();
+        Passage { speaker, lines, raw: message.text.clone() }
+    }
+
+    fn locate(&self, p: &Proc) -> Position {
+        let mut cells = self.locate_cursors(p);
+        // Every live VM seen so far sat at the start of a page, with its
+        // position cell at offset 0x10; stale copies sat elsewhere.
+        cells.sort_by_key(|c| (c & 0xFFF != 0x10, *c));
+        Position { cells }
+    }
+
+    fn read(&self, p: &Proc, cell: u64) -> Option<usize> {
+        self.message_at(p, cell)
     }
 }
 

@@ -1,16 +1,14 @@
-//! Turning raw in-memory text into readable lines. The rules here are the
-//! first "engine profile": the Entergram "shin" engine (Umineko Saku,
-//! Higurashi Hou, ...). The fixup table and the command grammar are taken
-//! from DCNick3's reimplementation, https://github.com/DCNick3/shin
-//! (shin-core/src/format/text/mod.rs and shin-core/src/layout/parser.rs).
-//! They are harmless on text that does not use this syntax.
+//! Turning message text of the shin engine into readable lines. The fixup
+//! table and the command grammar are taken from DCNick3's reimplementation,
+//! https://github.com/DCNick3/shin (shin-core/src/format/text/mod.rs and
+//! shin-core/src/layout/parser.rs).
 
 /// The engine stores common characters as half-width katakana, which take a
 /// single byte in Shift-JIS. Same position in both strings = same character.
 const FIXUP_ENCODED: &str = "｢｣ｧｨｩｪｫｬｭｮｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜｦﾝｰｯ､ﾟﾞ･\u{f8f0}｡";
 const FIXUP_DECODED: &str = "「」ぁぃぅぇぉゃゅょあいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんーっ、？！…　。";
 
-pub fn is_half_kana(c: char) -> bool {
+fn is_half_kana(c: char) -> bool {
     matches!(c, '\u{FF61}'..='\u{FF9F}')
 }
 
