@@ -16,10 +16,17 @@ pub struct Line {
     pub text: String,
 }
 
-pub struct Translator {
+/// What a request needs; cheap to clone so that requests can run without
+/// holding on to the cache.
+#[derive(Clone)]
+pub struct Client {
     key: String,
     pub model: String,
     language: String,
+}
+
+pub struct Translator {
+    pub client: Client,
     cache: HashMap<String, String>,
     cache_path: PathBuf,
 }
@@ -60,16 +67,29 @@ impl Translator {
             .filter_map(|l| l.split_once('\t'))
             .map(|(jp, tr)| (unescape(jp), unescape(tr)))
             .collect();
-        Ok(Translator { key, model, language: language_name(language).to_string(), cache, cache_path })
+        Ok(Translator { client: Client { key, model, language: language_name(language).to_string() }, cache, cache_path })
     }
 
     pub fn cached(&self, text: &str) -> Option<&String> {
         self.cache.get(text)
     }
 
-    /// Translates `lines` in one request and caches the result. `context`
-    /// holds the lines shown just before, for the model's reference only.
-    pub fn translate(&mut self, context: &[String], lines: &[Line]) -> Result<(), String> {
+    /// Caches translations, in memory and on disk.
+    pub fn store(&mut self, lines: &[Line], translations: Vec<String>) {
+        let mut file = OpenOptions::new().create(true).append(true).open(&self.cache_path).ok();
+        for (line, tr) in lines.iter().zip(translations) {
+            if let Some(f) = file.as_mut() {
+                let _ = writeln!(f, "{}\t{}", escape(&line.text), escape(&tr));
+            }
+            self.cache.insert(line.text.clone(), tr);
+        }
+    }
+}
+
+impl Client {
+    /// Translates `lines` in one request. `context` holds the lines shown
+    /// just before, for the model's reference only.
+    pub fn translate(&self, context: &[String], lines: &[Line]) -> Result<Vec<String>, String> {
         let input = json!({
             "previous_lines": context,
             "lines": lines.iter().map(|l| json!({"speaker": l.speaker, "text": l.text})).collect::<Vec<_>>(),
@@ -81,6 +101,7 @@ impl Translator {
              in the same order and with exactly the same number of entries. \
              An entry is one passage by one speaker and may hold several sentences on separate lines: \
              translate it as a whole and keep its line breaks. \
+             Entries without a speaker are narration; use the surrounding lines to tell who does what. \
              Translate faithfully and naturally, keep the speaker's tone, never merge or split entries, and add no notes.",
             self.language
         );
@@ -100,14 +121,7 @@ impl Translator {
         if translations.len() != lines.len() {
             return Err(format!("asked for {} translations, got {}", lines.len(), translations.len()));
         }
-        let mut file = OpenOptions::new().create(true).append(true).open(&self.cache_path).ok();
-        for (line, tr) in lines.iter().zip(translations) {
-            if let Some(f) = file.as_mut() {
-                let _ = writeln!(f, "{}\t{}", escape(&line.text), escape(&tr));
-            }
-            self.cache.insert(line.text.clone(), tr);
-        }
-        Ok(())
+        Ok(translations)
     }
 }
 

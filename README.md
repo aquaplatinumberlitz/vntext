@@ -17,6 +17,7 @@ Chỉ chạy trên Linux. Dùng cá nhân, chưa công bố.
 | 家属～母と姉妹の嬌声, Shihai no Kyoudan (bản tiếng Anh) | BISHOP (BSXScript 3.2) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | 牝教師 3, 淫獄の放課後 1–2, 隷従の制服, Shihai no Kyoudan 2 (bản tiếng Anh) | BISHOP (BSXScript 3.3) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | 催眠術2, 催眠術2 URA | BLACKRAINBOW spt | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
+| 催眠術3, 催眠術4, 催眠術 RE | MED | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra |
 | Game engine khác | chưa có profile | bất kỳ | Chỉ có chế độ quét chung, chưa dùng được (xem [Giới hạn](#giới-hạn)) |
 
 ## Dùng
@@ -57,6 +58,9 @@ src/
     bishop/
       mod.rs         Profile engine riêng của BISHOP (BSXScript)
       text.rs        Giải mã text của BISHOP (mã \n, \A, \B, ký tự riêng)
+    med/
+      mod.rs         Profile engine MED (催眠術3, 4, RE)
+      text.rs        Dò khoá, giải mã script và text của MED
     spt/
       mod.rs         Profile engine cũ của BLACKRAINBOW (script .spt)
       text.rs        Giải mã text của spt
@@ -113,6 +117,17 @@ Profile spt (`engines/spt/`), cho 催眠術2 và 催眠術2 URA:
 
 Khi một profile cần file của game (gói script của spt, `bsxx.ini` của bishop), thư mục game được xác định bằng nơi chứa file exe đang được nạp vào process, rồi mới tới thư mục làm việc. Cách đầu không phụ thuộc launcher: dưới Wine, file exe hiện ra với đường dẫn thật trên Linux.
 
+Profile med (`engines/med/`), cho 催眠術3, 催眠術4 và 催眠術 RE:
+
+1. Gói script `md_scr.med` được đọc từ thư mục game. Mỗi file trong gói bị mã hoá bằng cách cộng từng byte với một khoá lặp lại; khoá được dò ra từ file `_VIEW`, vì 24 byte đầu của nó giống nhau ở mọi game dùng engine này.
+2. Mỗi script là một dãy lệnh (số dòng nguồn, độ dài, mã lệnh, tham số) rồi tới bảng chuỗi; lệnh mang số thứ tự của chuỗi. Một khung thoại là một chuỗi lệnh: có thể có tên người nói (`13`), rồi text (`1`) và xuống dòng (`0`), kết thúc bằng lệnh xoá khung (`4`).
+3. Vị trí đang đọc lấy từ trạng thái máy ảo trong RAM, gồm (tính theo ô 32-bit): độ dài phần mã lệnh của script đang chạy, cách 4 ô là bộ đếm chương trình, cách 4 ô nữa là bản sao của bộ đếm, và ngay sau đó là con trỏ tới tên script. Tool tìm cụm này bằng cách quét bộ nhớ, rồi mỗi lần đọc lại tên script và bộ đếm.
+4. Bộ đếm trỏ tới lệnh kế tiếp; trong lúc một khung thoại hiện trên màn hình, máy ảo đứng ở lệnh xoá khung của nó.
+
+Phải nhận diện script bằng tên: rất nhiều script trong cùng một game có phần mã lệnh mở đầu giống hệt nhau (ở 催眠術4, 339 script chỉ có 64 kiểu mở đầu khác nhau), nên so mã lệnh sẽ nhận nhầm.
+
+Định dạng gói lấy từ GARbro; cách dò khoá và định dạng script lấy từ một bộ công cụ dịch cho engine này (`MED.py`, `SCE.py`), không rõ tác giả. `＄０` trong text là tên nhân vật chính và hiện chưa được thay.
+
 **Quét chung** (`text.rs`, hàm `auto` trong `main.rs`) — đường dự phòng:
 
 - Tìm chuỗi tiếng Nhật ở UTF-8, UTF-16LE và Shift-JIS, lọc dữ liệu nhị phân trông giống chữ (phải có kana liền nhau, kanji thuộc bảng Shift-JIS, không lặp vài ký tự, ...).
@@ -163,5 +178,7 @@ Engine đã nhận diện được trong `/mnt/evo860/HGAME/` (theo file đặc 
 
 - [DCNick3/shin](https://github.com/DCNick3/shin): bản viết lại engine Entergram; nguồn của định dạng SNR, bảng ký tự và cú pháp lệnh.
 - [crskycode/BSXScript_Tool](https://github.com/crskycode/BSXScript_Tool): công cụ xuất/nhập text của `bsxx.dat`; nguồn của định dạng BSXScript.
+- [GARbro, ArcMED.cs](https://github.com/morkt/GARbro/blob/master/ArcFormats/DxLib/ArcMED.cs): định dạng gói `.med`.
+- Bộ công cụ dịch cho engine MED (`MED.py`, `SCE.py`, không rõ tác giả): cách dò khoá và định dạng script.
 - Bộ công cụ patch tiếng Anh cho 催眠術2 (`blackrb_spt.py`, không rõ tác giả): nguồn của định dạng gói `*_spt.dat` và file `.spt`.
 - [0xDC00/agent](https://github.com/0xDC00/agent): text hooker dùng Frida, điểm xuất phát của dự án.

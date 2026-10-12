@@ -8,6 +8,7 @@
 use crate::mem::Proc;
 
 pub mod bishop;
+pub mod med;
 pub mod shin;
 pub mod spt;
 
@@ -61,7 +62,7 @@ pub trait Engine: Send + Sync {
 type Detector = fn(&Proc) -> Option<Box<dyn Engine>>;
 
 /// Tried in order; the ones that only look at the game's files come first.
-const DETECTORS: &[Detector] = &[spt::detect, shin::detect, bishop::detect];
+const DETECTORS: &[Detector] = &[spt::detect, med::detect, shin::detect, bishop::detect];
 
 /// Returns the profile of the first engine recognised in the process.
 pub fn detect(p: &Proc) -> Option<Box<dyn Engine>> {

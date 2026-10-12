@@ -283,6 +283,9 @@ fn test_and_set(bits: &mut Vec<u64>, page: u64) -> bool {
 
 /// The kernel keeps only this many bytes of a process name.
 const COMM_LEN: usize = 15;
+/// How long to wait for a process with the right name before taking one
+/// that only mentions it in its command line.
+const WAIT_FOR_GAME: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Resolves a pid or a (case-insensitive) substring of a process name / command line.
 ///
@@ -295,6 +298,32 @@ pub fn resolve(target: &str) -> Result<u32, String> {
     if let Ok(pid) = target.parse::<u32>() {
         return Ok(pid);
     }
+    // A launcher's wrappers exist before the game does. Give the game a
+    // while to appear rather than settling for a wrapper.
+    let mut waited = false;
+    let started = std::time::Instant::now();
+    let (pid, cmdline) = loop {
+        match find(target)? {
+            Some((true, pid, cmdline)) => break (pid, cmdline),
+            found if started.elapsed() >= WAIT_FOR_GAME => match found {
+                Some((_, pid, cmdline)) => break (pid, cmdline),
+                None => return Err(format!("no process matching '{target}'")),
+            },
+            _ => {
+                if !waited {
+                    eprintln!("waiting for a process named '{target}'...");
+                    waited = true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    };
+    eprintln!("target: pid {pid} ({cmdline})");
+    Ok(pid)
+}
+
+/// The best match for `target`: whether it matches by name, its pid and command line.
+fn find(target: &str) -> Result<Option<(bool, u32, String)>, String> {
     let needle = target.to_lowercase();
     let name: String = needle.chars().take(COMM_LEN).collect();
     let me = std::process::id();
@@ -319,7 +348,5 @@ pub fn resolve(target: &str) -> Result<u32, String> {
             best = Some(((named, rss), pid, cmdline.trim().to_string()));
         }
     }
-    let (_, pid, cmdline) = best.ok_or_else(|| format!("no process matching '{target}'"))?;
-    eprintln!("target: pid {pid} ({cmdline})");
-    Ok(pid)
+    Ok(best.map(|((named, _), pid, cmdline)| (named, pid, cmdline)))
 }

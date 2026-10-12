@@ -29,7 +29,7 @@ usage:
   --all     also scan read-only memory
   --clip    copy each line to the clipboard (wl-copy)
 
-when the game's engine is recognised (Entergram shin, BISHOP BSXScript, BLACKRAINBOW spt), auto also takes:
+when the game's engine is recognised (Entergram shin, BISHOP BSXScript, BLACKRAINBOW spt and MED), auto also takes:
   --raw          print text as the engine stores it, control codes included
   --debug        log every change of the cells that hold a reading position
   --web          serve a live page for reading with Yomitan (http://127.0.0.1:8777)
@@ -267,9 +267,11 @@ const READER_STEP: usize = 8;
 const STEPS_TO_TRUST: u32 = 2;
 /// Upcoming passages translated together with the current one, so that they
 /// are already cached when the reader gets there.
-const LOOKAHEAD: usize = 8;
+const LOOKAHEAD: usize = 12;
 /// Earlier passages sent along for the model's reference.
-const CONTEXT: usize = 4;
+const CONTEXT: usize = 8;
+/// Pause after a translation request that failed.
+const RETRY_AFTER: Duration = Duration::from_secs(5);
 
 /// Engine-profile mode: follow the game's reading position and print each
 /// passage as the game reaches it.
@@ -288,7 +290,7 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
     }
     let jobs = o.translate.then(|| {
         let translator = translate::Translator::new(&o.to, o.model.clone()).unwrap_or_else(|e| die(&e));
-        eprintln!("translating with {}", translator.model);
+        eprintln!("translating with {}", translator.client.model);
         let (tx, rx) = mpsc::channel();
         let (engine, hub) = (engine.clone(), hub.clone());
         thread::spawn(move || translator_worker(translator, engine, hub, rx));
@@ -416,41 +418,82 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
 /// Translates passages as they are shown, off the polling thread. A passage
 /// (a few sentences by one speaker) is translated as a whole: the sentences
 /// lean on each other too much to be translated one at a time.
-fn translator_worker(mut t: translate::Translator, engine: Arc<dyn Engine>, hub: web::Hub, jobs: Receiver<(u64, usize)>) {
+///
+/// Requests run on their own thread and reach ahead of the reader: a new one
+/// is started while half of the lookahead is still cached, so that a
+/// translation is normally there by the time its passage is shown.
+fn translator_worker(t: translate::Translator, engine: Arc<dyn Engine>, hub: web::Hub, jobs: Receiver<(u64, usize)>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+
     let unit = |index: usize| {
         let passage = engine.passage(index);
         translate::Line { speaker: passage.speaker, text: passage.lines.join("\n") }
     };
-    while let Ok(mut job) = jobs.recv() {
-        // when the reader is skipping ahead, only the newest message matters
-        let mut waiting: Vec<(u64, usize)> = jobs.try_iter().collect();
-        if waiting.len() > 3 {
-            job = waiting.pop().unwrap();
-            waiting.clear();
-        }
-        for (seq, index) in std::iter::once(job).chain(waiting) {
-            let current = unit(index).text;
-            if t.cached(&current).is_none() {
-                let context: Vec<String> = (index.saturating_sub(CONTEXT)..index).map(|i| unit(i).text).collect();
-                let upcoming = (index..engine.len().min(index + 1 + LOOKAHEAD)).map(unit);
-                let batch: Vec<translate::Line> = upcoming.filter(|l| t.cached(&l.text).is_none()).collect();
-                if let Err(e) = t.translate(&context, &batch) {
-                    eprintln!("\x1b[33mtranslation failed: {e}\x1b[0m");
-                    if e.contains("429") {
-                        thread::sleep(Duration::from_secs(30));
-                    }
-                    // a smaller request is more likely to come back well-formed
-                    if let Err(e) = t.translate(&context, &[unit(index)]) {
-                        eprintln!("\x1b[33mtranslation failed: {e}\x1b[0m");
-                    }
+    let client = t.client.clone();
+    let t = Arc::new(Mutex::new(t));
+    let fetching = Arc::new(AtomicBool::new(false));
+    // shown passages still waiting for their translation
+    let mut waiting: VecDeque<(u64, usize)> = VecDeque::new();
+    let mut newest = 0;
+    let mut latest = None;
+    loop {
+        match jobs.recv_timeout(TICK) {
+            Ok(job) => {
+                newest = job.0;
+                latest = Some(job.1);
+                waiting.push_back(job);
+                // when the reader is skipping ahead, only the newest passages matter
+                while waiting.len() > 4 {
+                    waiting.pop_front();
                 }
             }
-            if let Some(translation) = t.cached(&current) {
-                println!("\x1b[36m{translation}\x1b[0m");
-                let _ = std::io::stdout().flush();
-                hub.publish(serde_json::json!({"type": "translation", "seq": seq, "tr": translation}).to_string());
-            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
         }
+
+        waiting.retain(|(seq, index)| {
+            let Some(translation) = t.lock().unwrap().cached(&unit(*index).text).cloned() else { return true };
+            // a translation that comes after its passage has scrolled by says which one it is for
+            let late = if *seq == newest { String::new() } else { format!("\x1b[2m#{index}\x1b[0m ") };
+            println!("{late}\x1b[36m{translation}\x1b[0m");
+            let _ = std::io::stdout().flush();
+            hub.publish(serde_json::json!({"type": "translation", "seq": seq, "tr": translation}).to_string());
+            false
+        });
+
+        // top up from the newest passage seen, whether or not it is still waiting
+        let Some(index) = latest else { continue };
+        let missing: Vec<translate::Line> = {
+            let t = t.lock().unwrap();
+            (index..engine.len().min(index + 1 + LOOKAHEAD)).map(unit).filter(|l| t.cached(&l.text).is_none()).collect()
+        };
+        let urgent = waiting.iter().any(|(_, i)| *i == index);
+        if missing.is_empty() || !(urgent || missing.len() > LOOKAHEAD / 2) || fetching.swap(true, Ordering::SeqCst) {
+            continue;
+        }
+        let context: Vec<String> = (index.saturating_sub(CONTEXT)..index).map(|i| unit(i).text).collect();
+        let only = urgent.then(|| unit(index));
+        let (client, t, fetching) = (client.clone(), t.clone(), fetching.clone());
+        thread::spawn(move || {
+            let mut result = client.translate(&context, &missing).map(|tr| (missing, tr));
+            if let Err(e) = &result {
+                eprintln!("\x1b[33mtranslation failed: {e}\x1b[0m");
+                if e.contains("429") {
+                    thread::sleep(Duration::from_secs(30));
+                } else if let Some(only) = only {
+                    // a smaller request is more likely to come back well-formed
+                    let only = vec![only];
+                    result = client.translate(&context, &only).map(|tr| (only, tr));
+                }
+            }
+            match result {
+                Ok((lines, translations)) => t.lock().unwrap().store(&lines, translations),
+                // do not ask again at once: the loop would retry every tick
+                Err(_) => thread::sleep(RETRY_AFTER),
+            }
+            fetching.store(false, Ordering::SeqCst);
+        });
     }
 }
 
