@@ -18,6 +18,7 @@ Chỉ chạy trên Linux. Dùng cá nhân, chưa công bố.
 | 牝教師 3, 淫獄の放課後 1–2, 隷従の制服, Shihai no Kyoudan 2 (bản tiếng Anh) | BISHOP (BSXScript 3.3) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | 催眠術2, 催眠術2 URA | BLACKRAINBOW spt | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | 催眠術3, 催眠術4, 催眠術 RE | MED | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra |
+| 極限痴漢特異点 1, 2, 3, NEO và hai bản ハーレム | ArkEngine (Unity, Mono) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra; khung lựa chọn đã kiểm tra trên bản 3 |
 | Game engine khác | chưa có profile | bất kỳ | Chỉ có chế độ quét chung, chưa dùng được (xem [Giới hạn](#giới-hạn)) |
 
 ## Dùng
@@ -55,6 +56,9 @@ src/
     shin/
       mod.rs         Profile engine Entergram shin
       text.rs        Giải mã text của shin (bảng ký tự, lệnh @)
+    ark/
+      mod.rs         Profile ArkEngine của Astronauts (Unity)
+      text.rs        Giải mã gói script và tách khung thoại của ArkEngine
     bishop/
       mod.rs         Profile engine riêng của BISHOP (BSXScript)
       text.rs        Giải mã text của BISHOP (mã \n, \A, \B, ký tự riêng)
@@ -128,6 +132,17 @@ Profile med (`engines/med/`), cho 催眠術3, 催眠術4 và 催眠術 RE:
 Phải nhận diện script bằng tên: rất nhiều script trong cùng một game có phần mã lệnh mở đầu giống hệt nhau (ở 催眠術4, 339 script chỉ có 64 kiểu mở đầu khác nhau), nên so mã lệnh sẽ nhận nhầm.
 
 Định dạng gói lấy từ GARbro; cách dò khoá và định dạng script lấy từ một bộ công cụ dịch cho engine này (`MED.py`, `SCE.py`), không rõ tác giả.
+
+Profile ark (`engines/ark/`), cho loạt 極限痴漢特異点 (Unity kiểu Mono):
+
+1. Script là file văn bản, đóng gói và mã hoá trong `<game>_Data/StreamingAssets/scripts.bin` kèm `scripts.idx`. Mọi thứ trong gói là AES-256-CBC với khoá và vector khởi tạo cố định, chung cho cả sáu bản; mỗi mục của index và mỗi script được bọc thêm một lớp MessagePack.
+2. Trong script, một khung thoại nằm giữa `\text` (hoặc `\text("người nói",…)`) và `\endtext`.
+3. Trong RAM, đối tượng `ScriptParser` của game giữ tên script đang chạy, câu đang hiện và số dòng hiện tại. Tool tìm đối tượng này bằng năm trường liền nhau trỏ tới các chuỗi `"\n"`, `"\r"`, `" "`, `"["`, `"/"` (các dấu tách mà nó dùng để cắt dòng script).
+4. Khung đang hiện được xác định theo nội dung chứ không theo vị trí trường, vì bố cục đối tượng khác nhau giữa các bản: một trường chuỗi là tên script, một trường khác là text trùng với một khung của script đó (so sau khi bỏ khoảng trắng). Nếu script có nhiều khung cùng nội dung, khung có số dòng xuất hiện trong đối tượng được chọn.
+
+5. Lựa chọn là một dãy `\MENU(số,"chữ",…)` kết thúc bằng `\MENUEND`. Menu không để lại text riêng trong đối tượng: text vẫn là của khung thoại đứng trước nó, còn bộ đếm dòng đã chuyển vào phạm vi menu. Nên khi số dòng của khung thoại không còn trong đối tượng mà có một số nằm trong phạm vi của menu ngay sau khung đó, tool coi là menu đang hiện.
+
+Toàn bộ thông tin lấy từ chính mã của game, dịch ngược từ `Assembly-CSharp.dll` bằng ILSpy.
 
 **Quét chung** (`text.rs`, hàm `auto` trong `main.rs`) — đường dự phòng:
 
