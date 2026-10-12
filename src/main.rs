@@ -31,6 +31,7 @@ usage:
 
 when the game's engine is recognised (currently: the Entergram shin engine), auto also takes:
   --raw          print text as the engine stores it, control codes included
+  --debug        log every change of the cells that hold a reading position
   --web          serve a live page for reading with Yomitan (http://127.0.0.1:8777)
   --port N       port for --web
   --translate    translate each message with the Gemini API (needs GEMINI_API_KEY)
@@ -64,6 +65,7 @@ struct Opts {
     model: Option<String>,
     web: bool,
     port: u16,
+    debug: bool,
 }
 
 fn parse_args() -> Opts {
@@ -78,6 +80,7 @@ fn parse_args() -> Opts {
         model: None,
         web: false,
         port: 8777,
+        debug: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -87,6 +90,7 @@ fn parse_args() -> Opts {
             "--raw" => o.raw = true,
             "--translate" => o.translate = true,
             "--web" => o.web = true,
+            "--debug" => o.debug = true,
             "--to" => o.to = it.next().unwrap_or_else(|| die("--to needs a language")),
             "--model" => o.model = Some(it.next().unwrap_or_else(|| die("--model needs a model id"))),
             "--port" => o.port = it.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| die("--port needs a number")),
@@ -255,6 +259,12 @@ fn poll(p: &Proc, t: &mut Track, buf: &mut [u8]) -> bool {
 /// stays on one passage, so a slow reader does not cause constant rescans.
 const RELOCATE_FIRST: Duration = Duration::from_secs(3);
 const RELOCATE_MAX: Duration = Duration::from_secs(30);
+/// One search in this many is a thorough one.
+const THOROUGH_EVERY: u32 = 10;
+/// How far a cell may advance at once and still look like someone reading,
+/// and how many such steps in a row make an unrecognised cell believable.
+const READER_STEP: usize = 8;
+const STEPS_TO_TRUST: u32 = 2;
 /// Upcoming passages translated together with the current one, so that they
 /// are already cached when the reader gets there.
 const LOOKAHEAD: usize = 8;
@@ -281,14 +291,25 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
         tx
     });
 
-    let mut position = engine.locate(&p);
-    match position.cells.first() {
-        Some(c) => eprintln!("following reading position at {c:x}"),
+    // A cell that looks like a reading position, and what it has been doing.
+    struct Watch {
+        cell: engines::Cell,
+        seen: bool,
+        reading: Option<usize>,
+        /// last passage it pointed at, kept while it points at none
+        passage: Option<usize>,
+        /// consecutive small steps forward through the script
+        steps: u32,
+    }
+    let watch = |cell| Watch { cell, seen: false, reading: None, passage: None, steps: 0 };
+
+    let mut cells: Vec<Watch> = engine.locate(&p, true).cells.into_iter().map(watch).collect();
+    match cells.iter().find(|w| w.cell.trusted) {
+        Some(w) => eprintln!("following reading position at {:x}", w.cell.addr),
         None => eprintln!("waiting for the game to show text..."),
     }
-    // last reading of every cell: the live one is told apart by the fact that it moves
-    let mut readings: HashMap<u64, Option<usize>> = HashMap::new();
     let mut relocating: Option<Receiver<engines::Position>> = None;
+    let mut relocations = 0u32;
     let mut retry = RELOCATE_FIRST;
     let mut changed = Instant::now();
     let mut last = None;
@@ -298,13 +319,27 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
             die("target process is gone");
         }
         let mut next = None;
-        for (rank, cell) in position.cells.iter().enumerate() {
-            let now = engine.read(&p, *cell);
-            match readings.insert(*cell, now) {
-                Some(before) if before != now => next = now.or(next),
-                // nothing to compare with yet: believe the most trustworthy cell
-                None if rank == 0 => next = now.or(next),
-                _ => {}
+        for w in cells.iter_mut() {
+            let now = engine.read(&p, w.cell.addr);
+            if w.seen && now == w.reading {
+                continue;
+            }
+            if o.debug {
+                eprintln!("\x1b[2m  {:x} {} {:?} -> {now:?}\x1b[0m", w.cell.addr, if w.cell.trusted { "live" } else { "copy?" }, w.reading);
+            }
+            (w.seen, w.reading) = (true, now);
+            let Some(index) = now else { continue };
+            // A reader moves a few passages forward at a time; a buffer that
+            // is being reused for something else jumps around.
+            let forward = w.passage.is_some_and(|before| index > before && index - before <= READER_STEP);
+            w.steps = if forward { w.steps + 1 } else { 0 };
+            w.passage = Some(index);
+            if !w.cell.trusted && w.steps >= STEPS_TO_TRUST {
+                w.cell.trusted = true;
+                eprintln!("following reading position at {:x}", w.cell.addr);
+            }
+            if w.cell.trusted {
+                next = Some(index);
             }
         }
         if let Some(index) = next.filter(|i| last != Some(*i)) {
@@ -335,28 +370,39 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
             }
         }
 
+        let following = cells.iter().any(|w| w.cell.trusted);
         match relocating.as_ref().map(|rx| rx.try_recv()) {
-            Some(Ok(mut found)) => {
+            Some(Ok(found)) => {
                 relocating = None;
                 changed = Instant::now();
                 retry = (retry * 2).min(RELOCATE_MAX);
-                // keep cells that no longer match: they may only be between passages
-                let kept: Vec<u64> = position.cells.iter().copied().filter(|c| !found.cells.contains(c)).collect();
-                found.cells.extend(kept);
-                if found.cells.first() != position.cells.first() {
-                    eprintln!("following reading position at {:x}", found.cells[0]);
-                    readings.remove(&found.cells[0]);
+                // cells that no longer match are kept: they may only be between passages
+                for cell in found.cells {
+                    if !cells.iter().any(|w| w.cell.addr == cell.addr) {
+                        if cell.trusted {
+                            eprintln!("following reading position at {:x}", cell.addr);
+                        }
+                        cells.push(watch(cell));
+                    }
                 }
-                position = found;
             }
             Some(Err(TryRecvError::Disconnected)) => relocating = None,
             Some(Err(TryRecvError::Empty)) => {}
-            None if changed.elapsed() >= retry => {
+            // with nothing to follow, keep looking without pause
+            None if !following || changed.elapsed() >= retry => {
+                relocations += 1;
+                let thorough = relocations % THOROUGH_EVERY == 0;
                 let (tx, rx) = mpsc::channel();
-                let (engine, pid) = (engine.clone(), p.pid);
+                let (engine, pid, debug) = (engine.clone(), p.pid, o.debug);
                 thread::spawn(move || {
                     if let Ok(p) = Proc::open(pid) {
-                        let _ = tx.send(engine.locate(&p));
+                        let started = Instant::now();
+                        let found = engine.locate(&p, thorough);
+                        if debug {
+                            let kind = if thorough { "thorough" } else { "quick" };
+                            eprintln!("\x1b[2m  {kind} search: {} cells in {:.2}s\x1b[0m", found.cells.len(), started.elapsed().as_secs_f32());
+                        }
+                        let _ = tx.send(found);
                     }
                 });
                 relocating = Some(rx);

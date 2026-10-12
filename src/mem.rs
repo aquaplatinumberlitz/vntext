@@ -119,18 +119,50 @@ impl Proc {
 
     /// Walks every resident page once and hands it to `f(base, data, limit, mapping)`.
     /// Only strings starting before `limit` should be reported from a chunk.
+    pub fn scan(&self, all: bool, f: impl FnMut(u64, &[u8], usize, &Mapping)) -> io::Result<Stats> {
+        self.scan_where(all, |_| true, f)
+    }
+
+    /// Like `scan`, reading only the mappings that `keep` accepts.
+    pub fn scan_where(
+        &self,
+        all: bool,
+        keep: impl Fn(&Mapping) -> bool,
+        mut f: impl FnMut(u64, &[u8], usize, &Mapping),
+    ) -> io::Result<Stats> {
+        let mut buf = vec![0u8; CHUNK];
+        let mut stats = Stats::default();
+        let maps = self.runs(all, keep, |run, m| self.read_run(run, &mut buf, m, &mut f, &mut stats))?;
+        Ok(Stats { maps, ..stats })
+    }
+
+    /// Hands the first `len` bytes of every resident page to `f(page address, bytes)`.
+    /// Far quicker than `scan` when what is searched for sits at a fixed place in a page.
+    pub fn page_heads(&self, keep: impl Fn(&Mapping) -> bool, len: usize, mut f: impl FnMut(u64, &[u8])) -> io::Result<()> {
+        let mut head = vec![0u8; len];
+        self.runs(false, keep, |(start, end), _| {
+            for page in (start..end).step_by(PAGE as usize) {
+                if self.read(page, &mut head) == len {
+                    f(page, &head);
+                }
+            }
+        })?;
+        Ok(())
+    }
+
+    /// Finds the runs of resident pages, each page once, and returns the
+    /// number of mappings looked at.
     ///
     /// Emulators map the same shared memory file many times, so pages of shared
     /// mappings are deduplicated by (file, page offset). Non-resident pages are
     /// never touched: reading a hole in a shm mapping would allocate it.
-    pub fn scan(&self, all: bool, mut f: impl FnMut(u64, &[u8], usize, &Mapping)) -> io::Result<Stats> {
+    fn runs(&self, all: bool, keep: impl Fn(&Mapping) -> bool, mut f: impl FnMut((u64, u64), &Mapping)) -> io::Result<usize> {
         let maps = read_maps(self.pid)?;
         let mut seen: HashMap<(String, u64), Vec<u64>> = HashMap::new();
-        let mut buf = vec![0u8; CHUNK];
         let mut pm = vec![0u8; 8 * 65536];
-        let mut stats = Stats::default();
+        let mut visited = 0;
 
-        for m in maps.iter().filter(|m| m.wanted(all)) {
+        for m in maps.iter().filter(|m| m.wanted(all) && keep(m)) {
             let mut bits = if m.shared() && m.inode != 0 {
                 Some(seen.entry((m.dev.clone(), m.inode)).or_default())
             } else {
@@ -143,7 +175,7 @@ impl Proc {
                     continue;
                 }
             }
-            stats.maps += 1;
+            visited += 1;
 
             let mut run: Option<(u64, u64)> = None;
             let mut pg = 0u64;
@@ -169,17 +201,17 @@ impl Proc {
                     match (&mut run, resident) {
                         (Some(r), true) => r.1 = addr + PAGE,
                         (None, true) => run = Some((addr, addr + PAGE)),
-                        (Some(_), false) => self.read_run(run.take().unwrap(), &mut buf, m, &mut f, &mut stats),
+                        (Some(_), false) => f(run.take().unwrap(), m),
                         (None, false) => {}
                     }
                 }
                 pg += got as u64;
             }
             if let Some(r) = run.take() {
-                self.read_run(r, &mut buf, m, &mut f, &mut stats);
+                f(r, m);
             }
         }
-        Ok(stats)
+        Ok(visited)
     }
 
     fn read_run(

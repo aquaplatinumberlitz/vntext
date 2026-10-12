@@ -18,13 +18,21 @@ pub struct Passage {
     pub raw: String,
 }
 
-/// Places where the game keeps a reading position, as found by
-/// `Engine::locate`, most trustworthy first. There can be several: besides
-/// the live one, games keep copies (the state of a loaded save, for
-/// instance) that look the same but never move.
-#[derive(Clone, PartialEq, Default)]
+/// A place where the game keeps a reading position, as found by `Engine::locate`.
+#[derive(Clone, Copy, PartialEq)]
+pub struct Cell {
+    pub addr: u64,
+    /// The engine recognises this as the game's live state, so what it holds
+    /// can be shown right away. Other cells merely look like one: games keep
+    /// copies (the state stored in a save, for instance) that hold some
+    /// unrelated passage. Those are only believed once they are seen to step
+    /// through the script the way a reader does.
+    pub trusted: bool,
+}
+
+#[derive(Clone, Default)]
 pub struct Position {
-    pub cells: Vec<u64>,
+    pub cells: Vec<Cell>,
 }
 
 pub trait Engine: Send + Sync {
@@ -37,13 +45,15 @@ pub trait Engine: Send + Sync {
 
     fn passage(&self, index: usize) -> Passage;
 
-    /// Searches the process for the game's reading position. Slow (a full
-    /// memory scan); empty when the game is not showing text yet.
-    fn locate(&self, p: &Proc) -> Position;
+    /// Searches the process for the game's reading position; empty when the
+    /// game is not showing text. A quick search only looks where the live
+    /// state is expected; a `thorough` one scans the game's whole memory and
+    /// also reports cells that merely look right.
+    fn locate(&self, p: &Proc, thorough: bool) -> Position;
 
-    /// The passage one located cell points at. Fast: called for every cell
+    /// The passage the cell at `addr` points at. Fast: called for every cell
     /// many times per second.
-    fn read(&self, p: &Proc, cell: u64) -> Option<usize>;
+    fn read(&self, p: &Proc, addr: u64) -> Option<usize>;
 }
 
 type Detector = fn(&Proc) -> Option<Box<dyn Engine>>;

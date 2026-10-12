@@ -36,7 +36,7 @@ Các lệnh khác:
 | `find <pid\|tên> <chuỗi>` | Tìm địa chỉ một chuỗi đã biết, ở cả ba bảng mã |
 | `watch <pid\|tên> <địa chỉ hex> <utf8\|utf16\|sjis>` | Theo dõi một địa chỉ cố định |
 
-Tuỳ chọn chung: `--clip` (đưa vào clipboard qua `wl-copy`), `--all` (quét cả vùng chỉ đọc), `--min N` (độ dài chuỗi tối thiểu). Khi có profile engine: `--raw` in text nguyên dạng engine lưu, gồm cả mã điều khiển.
+Tuỳ chọn chung: `--clip` (đưa vào clipboard qua `wl-copy`), `--all` (quét cả vùng chỉ đọc), `--min N` (độ dài chuỗi tối thiểu). Khi có profile engine: `--raw` in text nguyên dạng engine lưu, gồm cả mã điều khiển; `--debug` in mọi lần một ô vị trí đổi giá trị, dùng khi tool hiện sai đoạn hoặc đứng im.
 
 ## Cấu trúc
 
@@ -73,9 +73,14 @@ Có hai đường, `auto` tự chọn.
 
 1. Tìm file kịch bản trong RAM qua chữ ký `SNR `, đọc cả file.
 2. Tách mọi lệnh thoại `MSGSET` (opcode `0x86`), kiểm tra bằng việc số thứ tự thoại phải liên tiếp. Bố cục lệnh lệch nhau giữa các game: bảng `LAYOUTS` liệt kê các kiểu đã biết (Umineko 7 byte đầu, Higurashi 8), tool thử hết và giữ kiểu đọc ra nhiều đoạn hơn.
-3. Tìm ô nhớ vị trí của máy ảo script: một ô 32-bit chứa vị trí bắt đầu của một lệnh thoại, và 8 byte trước nó là vị trí ngay sau lệnh đó.
-4. Đọc ô đó mỗi 50 ms; khi nó trỏ sang lệnh thoại khác thì in đoạn mới.
-5. Nếu 15 giây không có đoạn mới, tìm lại ô vị trí ở luồng nền (ô này đổi chỗ khi game dựng lại máy ảo).
+3. Tìm ô nhớ vị trí của máy ảo script: một ô 32-bit chứa vị trí bắt đầu của một lệnh thoại, và 8 byte trước nó là vị trí ngay sau lệnh đó. Chỉ tìm trong vùng nhớ chứa kịch bản, tức RAM của game; bộ nhớ riêng của emulator cũng có dữ liệu khớp dạng này.
+4. Đọc các ô tìm được mỗi 50 ms; khi ô trỏ sang lệnh thoại khác thì in đoạn mới.
+5. Tìm lại vị trí ở luồng nền khi 3 giây không có đoạn mới (giãn dần tới 30 giây), và tìm liên tục khi chưa có gì để bám. Ô vị trí đổi chỗ khi load save hoặc về màn hình chính.
+
+Không phải ô nào khớp dạng cũng là ô thật. Game giữ các bản sao trạng thái máy ảo (trạng thái của file save vừa load, bộ đệm đọc file save) trỏ tới một đoạn chẳng liên quan. Cách phân biệt:
+
+- Ô nằm ở đầu trang nhớ, tại offset `0x10`, được tin ngay. Mọi ô thật quan sát được trên cả hai game đều nằm ở đó, bản sao thì không. Nhờ vậy lần tìm thông thường chỉ đọc vài byte đầu mỗi trang (dưới 1 giây thay vì khoảng 5 giây quét cả RAM).
+- Ô ở chỗ khác chỉ được tin khi nó tiến từng bước nhỏ về phía trước hai lần liên tiếp, như một người đang đọc. Một phần mười số lần tìm là quét kỹ để thấy các ô loại này.
 
 Text của shin là Shift-JIS, trong đó hiragana và vài dấu câu được ghi bằng katakana nửa độ rộng một byte, xen với lệnh `@` (`@r` xuống dòng, `@k` chờ bấm, `@v` voice, `@c` màu, `@b…@<…@>` furigana, ...). `engines/shin/text.rs` chuyển về text đọc được. Bảng ký tự và cú pháp lệnh lấy từ [DCNick3/shin](https://github.com/DCNick3/shin) (MPL-2.0).
 
@@ -107,8 +112,8 @@ Mỗi họ engine là một module trong `src/engines/`, cài đặt giao diện
 |---|---|
 | `detect(process)` | Nhận ra engine trong process và nạp kịch bản; trả về rỗng nếu không phải |
 | `len()`, `passage(i)` | Số đoạn thoại, và đoạn thứ `i`: người nói, các câu đã giải mã, text gốc |
-| `locate(process)` | Tìm nơi game lưu vị trí đang đọc. Chậm (quét toàn bộ), chỉ gọi lúc đầu và khi mất dấu |
-| `current(process, vị trí)` | Đoạn đang hiển thị. Nhanh, gọi 20 lần mỗi giây |
+| `locate(process, kỹ hay nhanh)` | Tìm các ô nhớ giữ vị trí đang đọc, kèm đánh dấu ô nào được engine nhận là ô thật. Gọi ở luồng nền |
+| `read(process, địa chỉ ô)` | Đoạn mà một ô đang trỏ tới. Nhanh, gọi 20 lần mỗi giây cho mỗi ô |
 
 Thêm một họ engine gồm hai việc: viết module mới, và thêm hàm `detect` của nó vào `DETECTORS` trong `engines/mod.rs`. Phần dịch, trang web và dòng lệnh không phải sửa.
 

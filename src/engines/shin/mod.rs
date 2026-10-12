@@ -12,14 +12,16 @@ use std::collections::HashMap;
 use encoding_rs::SHIFT_JIS;
 use memchr::memmem;
 
-use super::{Engine, Passage, Position};
-use crate::mem::Proc;
+use super::{Cell, Engine, Passage, Position};
+use crate::mem::{Mapping, Proc};
 use text::clean;
 
 mod text;
 
 const MAGIC: &[u8] = b"SNR ";
 const MSGSET: u8 = 0x86;
+/// Offset of the position cell inside the page that holds a live VM.
+const LIVE_CELL: u64 = 0x10;
 /// Fewer messages than this and the "scenario" is something else.
 const MIN_MESSAGES: usize = 50;
 
@@ -60,6 +62,8 @@ pub struct Script {
     by_start: HashMap<u32, usize>,
     size: usize,
     layout: &'static Layout,
+    /// device and inode of the memory object the scenario was found in
+    home: (String, u64),
 }
 
 /// Message text is Shift-JIS in which single bytes A0..DF stand for the
@@ -117,22 +121,23 @@ impl Script {
             .collect();
         let messages: Vec<Message> = found.into_iter().zip(consecutive).filter(|(_, ok)| *ok).map(|((_, m), _)| m).collect();
         let by_start = messages.iter().enumerate().map(|(k, m)| (m.start, k)).collect();
-        Script { messages, by_start, size: data.len(), layout }
+        Script { messages, by_start, size: data.len(), layout, home: Default::default() }
     }
 
     /// Looks for a loaded scenario in the target process.
     fn find(p: &Proc) -> Option<Script> {
         let finder = memmem::Finder::new(MAGIC);
         let mut candidates = Vec::new();
-        p.scan(false, |base, data, limit, _| {
+        p.scan(false, |base, data, limit, m| {
             for off in finder.find_iter(data).take_while(|off| *off < limit) {
                 if let Some(size) = data.get(off + 4..off + 8) {
-                    candidates.push((base + off as u64, u32::from_le_bytes(size.try_into().unwrap()) as usize));
+                    let size = u32::from_le_bytes(size.try_into().unwrap()) as usize;
+                    candidates.push((base + off as u64, size, (m.dev.clone(), m.inode)));
                 }
             }
         })
         .ok()?;
-        for (addr, size) in candidates {
+        for (addr, size, home) in candidates {
             if !(0x1000..=512 << 20).contains(&size) {
                 continue;
             }
@@ -142,7 +147,7 @@ impl Script {
             }
             let script = Script::parse(&data);
             if script.messages.len() >= MIN_MESSAGES {
-                return Some(script);
+                return Some(Script { home, ..script });
             }
         }
         None
@@ -152,6 +157,10 @@ impl Script {
     /// of a MSGSET instruction with, 8 bytes before it, the offset just past
     /// that same instruction (the VM's program counter while it waits on the
     /// message). The pairing makes accidental matches practically impossible.
+    ///
+    /// Only the memory object that holds the scenario is searched, i.e. the
+    /// game's own memory: an emulator keeps data of its own that matches too
+    /// (buffered save files hold a VM state).
     fn locate_cursors(&self, p: &Proc) -> Vec<u64> {
         let mut is_start = vec![0u64; self.size / 64 + 1];
         for m in &self.messages {
@@ -159,7 +168,7 @@ impl Script {
         }
         let size = self.size as u32;
         let mut cursors = Vec::new();
-        let _ = p.scan(false, |base, data, limit, _| {
+        let _ = p.scan_where(false, |m| self.at_home(m), |base, data, limit, _| {
             for (k, cell) in data[..limit & !3].chunks_exact(4).enumerate().skip(2) {
                 let v = u32::from_le_bytes(cell.try_into().unwrap());
                 if v == 0 || v >= size || is_start[v as usize / 64] >> (v % 64) & 1 == 0 {
@@ -172,6 +181,25 @@ impl Script {
             }
         });
         cursors
+    }
+
+    fn at_home(&self, m: &Mapping) -> bool {
+        (m.dev.as_str(), m.inode) == (self.home.0.as_str(), self.home.1)
+    }
+
+    /// Finds live VMs the quick way. Every live VM seen so far sat at the
+    /// start of a page, with its position cell at offset 0x10 (and so the
+    /// program counter at 0x08); copies of a VM state sat elsewhere.
+    fn locate_live(&self, p: &Proc) -> Vec<u64> {
+        let mut cells = Vec::new();
+        let _ = p.page_heads(|m| self.at_home(m), LIVE_CELL as usize + 4, |page, head| {
+            let word = |at: usize| u32::from_le_bytes(head[at..at + 4].try_into().unwrap());
+            let waiting_on = self.by_start.get(&word(LIVE_CELL as usize)).map(|i| self.messages[*i].end);
+            if waiting_on == Some(word(LIVE_CELL as usize - 8)) {
+                cells.push(page + LIVE_CELL);
+            }
+        });
+        cells
     }
 
     /// The message a position cell currently points at, if any.
@@ -203,16 +231,17 @@ impl Engine for Script {
         Passage { speaker, lines, raw: message.text.clone() }
     }
 
-    fn locate(&self, p: &Proc) -> Position {
-        let mut cells = self.locate_cursors(p);
-        // Every live VM seen so far sat at the start of a page, with its
-        // position cell at offset 0x10; stale copies sat elsewhere.
-        cells.sort_by_key(|c| (c & 0xFFF != 0x10, *c));
+    fn locate(&self, p: &Proc, thorough: bool) -> Position {
+        let mut cells: Vec<Cell> = self.locate_live(p).into_iter().map(|addr| Cell { addr, trusted: true }).collect();
+        if thorough {
+            let other = self.locate_cursors(p).into_iter().filter(|a| a & 0xFFF != LIVE_CELL);
+            cells.extend(other.map(|addr| Cell { addr, trusted: false }));
+        }
         Position { cells }
     }
 
-    fn read(&self, p: &Proc, cell: u64) -> Option<usize> {
-        self.message_at(p, cell)
+    fn read(&self, p: &Proc, addr: u64) -> Option<usize> {
+        self.message_at(p, addr)
     }
 }
 
