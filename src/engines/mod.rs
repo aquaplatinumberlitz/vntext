@@ -9,6 +9,7 @@ use crate::mem::Proc;
 
 pub mod bishop;
 pub mod shin;
+pub mod spt;
 
 /// One unit of text as the game shows it: a few sentences, usually by one speaker.
 pub struct Passage {
@@ -59,7 +60,8 @@ pub trait Engine: Send + Sync {
 
 type Detector = fn(&Proc) -> Option<Box<dyn Engine>>;
 
-const DETECTORS: &[Detector] = &[shin::detect, bishop::detect];
+/// Tried in order; the ones that only look at the game's files come first.
+const DETECTORS: &[Detector] = &[spt::detect, shin::detect, bishop::detect];
 
 /// Returns the profile of the first engine recognised in the process.
 pub fn detect(p: &Proc) -> Option<Box<dyn Engine>> {

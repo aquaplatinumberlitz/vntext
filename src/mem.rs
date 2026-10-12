@@ -254,32 +254,42 @@ fn test_and_set(bits: &mut Vec<u64>, page: u64) -> bool {
     was
 }
 
+/// The kernel keeps only this many bytes of a process name.
+const COMM_LEN: usize = 15;
+
 /// Resolves a pid or a (case-insensitive) substring of a process name / command line.
-/// When several processes match, the one with the largest RSS wins.
+///
+/// A process whose own name matches beats one that merely has the text in
+/// its command line: a game started through a launcher has wrapper processes
+/// (umu-run, proton) that carry the game's path as an argument, run in the
+/// game's directory and can be as large as the game itself. Among equals the
+/// one with the largest RSS wins.
 pub fn resolve(target: &str) -> Result<u32, String> {
     if let Ok(pid) = target.parse::<u32>() {
         return Ok(pid);
     }
     let needle = target.to_lowercase();
+    let name: String = needle.chars().take(COMM_LEN).collect();
     let me = std::process::id();
-    let mut best: Option<(u64, u32, String)> = None;
+    let mut best: Option<((bool, u64), u32, String)> = None;
     for entry in fs::read_dir("/proc").map_err(|e| e.to_string())?.flatten() {
         let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
         if pid == me {
             continue;
         }
-        let comm = fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        let comm = fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default().to_lowercase();
         let cmdline = fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
         let cmdline = String::from_utf8_lossy(&cmdline).replace('\0', " ");
-        if !comm.to_lowercase().contains(&needle) && !cmdline.to_lowercase().contains(&needle) {
+        let named = comm.contains(&name);
+        if !named && !cmdline.to_lowercase().contains(&needle) {
             continue;
         }
         let rss = fs::read_to_string(format!("/proc/{pid}/statm"))
             .ok()
             .and_then(|s| s.split(' ').nth(1).and_then(|v| v.parse::<u64>().ok()))
             .unwrap_or(0);
-        if best.as_ref().is_none_or(|b| rss > b.0) {
-            best = Some((rss, pid, cmdline.trim().to_string()));
+        if best.as_ref().is_none_or(|b| (named, rss) > b.0) {
+            best = Some(((named, rss), pid, cmdline.trim().to_string()));
         }
     }
     let (_, pid, cmdline) = best.ok_or_else(|| format!("no process matching '{target}'"))?;

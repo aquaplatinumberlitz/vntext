@@ -16,6 +16,7 @@ Chỉ chạy trên Linux. Dùng cá nhân, chưa công bố.
 | 牝教師 4, Sansha Mendan (bản tiếng Anh) | BISHOP (BSXScript 3.1) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | 家属～母と姉妹の嬌声, Shihai no Kyoudan (bản tiếng Anh) | BISHOP (BSXScript 3.2) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | 牝教師 3, 淫獄の放課後 1–2, 隷従の制服, Shihai no Kyoudan 2 (bản tiếng Anh) | BISHOP (BSXScript 3.3) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
+| 催眠術2, 催眠術2 URA | BLACKRAINBOW spt | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | Game engine khác | chưa có profile | bất kỳ | Chỉ có chế độ quét chung, chưa dùng được (xem [Giới hạn](#giới-hạn)) |
 
 ## Dùng
@@ -26,7 +27,7 @@ cargo build --release
 ```
 
 - Mở game tới chỗ có thoại rồi mới chạy.
-- `ryujinx` là tên process (khớp một phần, không phân biệt hoa thường); cũng có thể đưa PID.
+- `ryujinx` là tên process (khớp một phần, không phân biệt hoa thường); cũng có thể đưa PID. Process có tên khớp được ưu tiên hơn process chỉ có chuỗi đó trong dòng lệnh, vì game chạy qua launcher có các lớp bọc (umu-run, proton) mang đường dẫn game làm tham số.
 - `--web` mở trang `http://127.0.0.1:8777`: mỗi đoạn thoại hiện lên cùng bản dịch, rê chuột để tra từ bằng Yomitan.
 - `--translate` cần biến môi trường `GEMINI_API_KEY`. Mặc định dịch sang tiếng Việt (`--to en` để đổi) bằng model Flash-Lite mới nhất mà API liệt kê (`--model` để chỉ định).
 
@@ -56,6 +57,9 @@ src/
     bishop/
       mod.rs         Profile engine riêng của BISHOP (BSXScript)
       text.rs        Giải mã text của BISHOP (mã \n, \A, \B, ký tự riêng)
+    spt/
+      mod.rs         Profile engine cũ của BLACKRAINBOW (script .spt)
+      text.rs        Giải mã text của spt
   translate.rs       Dịch qua Gemini API, có cache
   web.rs             Máy chủ trang web, đẩy sự kiện tới trình duyệt
   page.html          Trang hiển thị cho Yomitan
@@ -98,6 +102,14 @@ Profile bishop (`engines/bishop/`), cho các game dùng `bsxx.dat`:
 4. Giải mã text: `\n` là xuống dòng trong khung thoại (bỏ), `\b` và `\s` đổi cỡ chữ (bỏ), `\A` và `\B` là họ và tên nhân vật chính (đọc từ `bsxx.ini` trong thư mục game), `U+E000` là dấu ♥. Các ký tự `U+E0xx` khác được suy đoán là kana có dấu đục; chưa gặp trong game để đối chiếu.
 
 Định dạng file và độ dài lệnh lấy từ [crskycode/BSXScript_Tool](https://github.com/crskycode/BSXScript_Tool).
+
+Profile spt (`engines/spt/`), cho 催眠術2 và 催眠術2 URA:
+
+1. Engine này không giữ file script trong RAM (nó biến mỗi script thành danh sách liên kết các lệnh), nên gói script `*_spt.dat` được đọc từ thư mục game, lấy qua thư mục làm việc của process.
+2. Gói gồm nhiều file `.spt`; mỗi file là một dãy lệnh, lệnh `0x08` là câu thoại. Text là Shift-JIS, cứ 4 byte thì byte đầu bị đảo bit thấp nhất. Tên người nói nằm đầu câu dạng `【tên】`.
+3. Vị trí đang đọc: chương trình giữ ở chỗ cố định phần đầu của script đang chạy (tên, số lệnh, kích thước), sau đó 12 byte là số thứ tự lệnh hiện tại, rồi tên script lặp lại một lần nữa. Máy ảo đứng yên ở lệnh thoại suốt lúc câu đó hiện trên màn hình; điều này đã được đo trên cả hai game.
+
+Định dạng lấy từ một bộ công cụ patch tiếng Anh cho hai game này (`blackrb_spt.py`), không rõ tác giả.
 
 **Quét chung** (`text.rs`, hàm `auto` trong `main.rs`) — đường dự phòng:
 
@@ -149,4 +161,5 @@ Engine đã nhận diện được trong `/mnt/evo860/HGAME/` (theo file đặc 
 
 - [DCNick3/shin](https://github.com/DCNick3/shin): bản viết lại engine Entergram; nguồn của định dạng SNR, bảng ký tự và cú pháp lệnh.
 - [crskycode/BSXScript_Tool](https://github.com/crskycode/BSXScript_Tool): công cụ xuất/nhập text của `bsxx.dat`; nguồn của định dạng BSXScript.
+- Bộ công cụ patch tiếng Anh cho 催眠術2 (`blackrb_spt.py`, không rõ tác giả): nguồn của định dạng gói `*_spt.dat` và file `.spt`.
 - [0xDC00/agent](https://github.com/0xDC00/agent): text hooker dùng Frida, điểm xuất phát của dự án.

@@ -29,7 +29,7 @@ usage:
   --all     also scan read-only memory
   --clip    copy each line to the clipboard (wl-copy)
 
-when the game's engine is recognised (Entergram shin, BISHOP BSXScript), auto also takes:
+when the game's engine is recognised (Entergram shin, BISHOP BSXScript, BLACKRAINBOW spt), auto also takes:
   --raw          print text as the engine stores it, control codes included
   --debug        log every change of the cells that hold a reading position
   --web          serve a live page for reading with Yomitan (http://127.0.0.1:8777)
@@ -381,6 +381,8 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
                     if !cells.iter().any(|w| w.cell.addr == cell.addr) {
                         if cell.trusted {
                             eprintln!("following reading position at {:x}", cell.addr);
+                        } else if o.debug {
+                            eprintln!("\x1b[2m  {:x} found, not trusted yet\x1b[0m", cell.addr);
                         }
                         cells.push(watch(cell));
                     }
@@ -393,16 +395,10 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
                 relocations += 1;
                 let thorough = relocations % THOROUGH_EVERY == 0;
                 let (tx, rx) = mpsc::channel();
-                let (engine, pid, debug) = (engine.clone(), p.pid, o.debug);
+                let (engine, pid) = (engine.clone(), p.pid);
                 thread::spawn(move || {
                     if let Ok(p) = Proc::open(pid) {
-                        let started = Instant::now();
-                        let found = engine.locate(&p, thorough);
-                        if debug {
-                            let kind = if thorough { "thorough" } else { "quick" };
-                            eprintln!("\x1b[2m  {kind} search: {} cells in {:.2}s\x1b[0m", found.cells.len(), started.elapsed().as_secs_f32());
-                        }
-                        let _ = tx.send(found);
+                        let _ = tx.send(engine.locate(&p, thorough));
                     }
                 });
                 relocating = Some(rx);
