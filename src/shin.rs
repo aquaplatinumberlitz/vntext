@@ -71,23 +71,30 @@ fn decode(bytes: &[u8]) -> Option<String> {
 impl Script {
     /// Picks the messages out of a scenario image. A MSGSET instruction is
     /// `86 | id: u24 | wait: u8 | len: u16 | text` with `len` counting the
-    /// terminating NUL. Message ids are consecutive, which is what separates
-    /// real instructions from bytes that merely look like one.
+    /// terminating NUL; some versions of the engine (Higurashi Hou) have one
+    /// more byte before `len`. Message ids are consecutive, which is what
+    /// separates real instructions from bytes that merely look like one.
     fn parse(data: &[u8]) -> Script {
+        let by_layout = [7, 8].map(|head_len| Script::parse_with(data, head_len));
+        by_layout.into_iter().max_by_key(|s| s.messages.len()).unwrap()
+    }
+
+    fn parse_with(data: &[u8], head_len: usize) -> Script {
         let mut found: Vec<(u32, Message)> = Vec::new();
         let mut i = 0;
         while let Some(k) = memchr::memchr(MSGSET, &data[i..]) {
             let at = i + k;
             i = at + 1;
-            let Some(head) = data.get(at..at + 7) else { break };
+            let Some(head) = data.get(at..at + head_len) else { break };
             let id = u32::from_le_bytes([head[1], head[2], head[3], 0]);
-            let len = u16::from_le_bytes([head[5], head[6]]) as usize;
-            let Some(body) = data.get(at + 7..at + 7 + len) else { continue };
+            let len = u16::from_le_bytes([head[head_len - 2], head[head_len - 1]]) as usize;
+            let text_at = at + head_len;
+            let Some(body) = data.get(text_at..text_at + len) else { continue };
             if head[4] > 1 || len < 2 || body[len - 1] != 0 || body[..len - 1].contains(&0) {
                 continue;
             }
             let Some(text) = decode(&body[..len - 1]) else { continue };
-            found.push((id, Message { start: at as u32, end: (at + 7 + len) as u32, text }));
+            found.push((id, Message { start: at as u32, end: (text_at + len) as u32, text }));
         }
         let consecutive: Vec<bool> = (0..found.len())
             .map(|k| (k > 0 && found[k - 1].0 + 1 == found[k].0) || (k + 1 < found.len() && found[k].0 + 1 == found[k + 1].0))
