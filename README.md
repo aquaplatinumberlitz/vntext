@@ -62,8 +62,25 @@ Nếu chơi trên Windows, Textractor vẫn là lựa chọn hợp lý hơn; v�
 
 ## Dùng
 
+### Bằng chuột
+
 ```
 cargo build --release
+./target/release/vntext install     # một lần: đưa vntext vào menu ứng dụng
+```
+
+Từ đó mở vntext từ menu ứng dụng (hoặc chạy `./target/release/vntext` không kèm gì) là hiện cửa sổ chọn game:
+
+- Danh sách là các cửa sổ X11 đang mở (trên phiên Wayland gần như chỉ còn game, qua XWayland). Mỗi dòng ghi tiêu đề cửa sổ, tên process và engine đã nhận ra; game chưa có profile ghi "chưa có profile". Danh sách tự làm mới mỗi 2 giây.
+- Chọn một game, chọn có dịch không, dịch sang ngôn ngữ nào, bằng nguồn nào, và có mở trang web cho Yomitan không (cổng 8777). Lựa chọn lưu theo tên process trong `~/.config/vntext/games.json`, mở lại game cũ là thấy lại.
+- Nút chính là "Đọc game này" (game có profile) hoặc "Đọc bằng OCR" (không có; cần key Gemini, lần đầu hỏi khoanh khung thoại). Bấm là dải nổi hiện lên, cửa sổ chọn game ẩn đi; game đóng hoặc phần đọc dừng thì cửa sổ hiện lại, kèm dòng cuối mà phần đọc đã in ra nếu nó dừng vì lỗi.
+- Nút "Thêm vào menu ứng dụng" làm giống `vntext install`: ghi `~/.local/share/applications/vntext.desktop`.
+
+Phía sau, cửa sổ này chạy lại chính file `vntext` như tiến trình con với đúng các tham số dưới đây (ví dụ `vntext auto <pid> --overlay --translate --to vi --via google`).
+
+### Bằng dòng lệnh
+
+```
 ./target/release/vntext auto ryujinx --web --translate
 ```
 
@@ -116,6 +133,8 @@ Các lệnh khác:
 
 | Lệnh | Tác dụng |
 |---|---|
+| (không tham số) | Mở cửa sổ chọn game |
+| `install` | Thêm vntext vào menu ứng dụng |
 | `auto <pid\|tên>` | Theo dõi và in đoạn thoại mới của game có profile; tự nhận engine |
 | `ocr <pid\|tên>` | Đọc khung thoại từ ảnh chụp qua Gemini, cho game chưa có profile |
 | `strings <pid\|tên>` | In mọi chuỗi tiếng Nhật đang có trong bộ nhớ. Dùng để khảo sát game mới |
@@ -151,6 +170,8 @@ Lưu ý khi tìm game theo tên: Linux chỉ giữ 15 byte đầu của tên pro
 ```
 src/
   main.rs            Dòng lệnh và các vòng lặp chính
+  launcher.rs        Cửa sổ chọn game (GTK4) khi chạy không tham số; chạy phần đọc như tiến trình con
+  install.rs         `vntext install`: ghi file .desktop vào menu ứng dụng
   mem.rs             Đọc bộ nhớ process khác
   text.rs            Tìm chuỗi tiếng Nhật trong dữ liệu thô (cho các lệnh khảo sát)
   engines/
@@ -187,7 +208,7 @@ src/
       text.rs        Gói YPF, script YSTB và cách dò khoá của YU-RIS
   translate.rs       Các nguồn dịch (Gemini, OpenAI, DeepSeek, Claude, server local, Google), có cache
   ocr.rs             Đọc khung thoại từ ảnh chụp qua Gemini
-  screen.rs          Tìm và chụp cửa sổ game qua X11, nén ảnh
+  screen.rs          Liệt kê, tìm và chụp cửa sổ game qua X11, nén ảnh
   overlay.rs         Dải nổi và cụm nút cạnh cửa sổ game (GTK4, layer-shell)
   yomitan.rs         Tra từ qua API của Yomitan
   web.rs             Máy chủ trang web, đẩy sự kiện tới trình duyệt

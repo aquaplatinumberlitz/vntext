@@ -1,6 +1,8 @@
 #[allow(dead_code)] // until the lookup that uses it is written
 mod dict;
 mod engines;
+mod install;
+mod launcher;
 mod mem;
 mod ocr;
 mod overlay;
@@ -26,6 +28,8 @@ const USAGE: &str = "\
 vntext - read Japanese text out of a running game or emulator
 
 usage:
+  vntext                                                 open the window that lists running games
+  vntext install                                         put vntext in the application menu
   vntext auto    <pid|name> [--clip]                     follow a game whose engine has a profile
   vntext ocr     <pid|name> [--pick] [--clip]            read the text box of any game from pictures of it
                                                          (needs a Gemini API key)
@@ -138,6 +142,12 @@ fn main() {
     let cfg = Cfg { min_chars: o.min, min_kana: 2 };
     let a: Vec<&str> = o.args.iter().map(String::as_str).collect();
     match a.as_slice() {
+        [] => launcher::run(),
+        ["--help"] | ["-h"] => println!("{USAGE}"),
+        ["install"] => match install::menu() {
+            Ok(file) => println!("wrote {}", file.display()),
+            Err(e) => die(&e),
+        },
         ["auto", target] => {
             let p = open(target);
             eprintln!("scanning...");

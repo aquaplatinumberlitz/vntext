@@ -34,11 +34,66 @@ pub struct Picture {
     pub shades: Vec<u8>,
 }
 
+/// A window of the desktop's client list, as the launcher shows it.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Listed {
+    pub window: Window,
+    pub pid: u32,
+    pub title: String,
+    pub area: u32,
+}
+
+/// One window for each process, the largest, in the order they first appear;
+/// the windows of `me` and of no known process are left out.
+pub fn by_process(windows: Vec<Listed>, me: u32) -> Vec<Listed> {
+    let mut kept: Vec<Listed> = Vec::new();
+    for window in windows.into_iter().filter(|w| w.pid != 0 && w.pid != me) {
+        match kept.iter_mut().find(|k| k.pid == window.pid) {
+            Some(known) if window.area > known.area => *known = window,
+            Some(_) => {}
+            None => kept.push(window),
+        }
+    }
+    kept
+}
+
 impl Screen {
     pub fn open() -> Result<Screen, String> {
         let (conn, screen) = x11rb::connect(None).map_err(|e| format!("cannot reach the X server: {e}"))?;
         let root = conn.setup().roots[screen].root;
         Ok(Screen { conn, root })
+    }
+
+    /// The windows the window manager lists, with the process each belongs to.
+    pub fn windows(&self) -> Vec<Listed> {
+        let Some(listed) = self.atom(b"_NET_CLIENT_LIST").and_then(|list| self.conn.get_property(false, self.root, list, AtomEnum::WINDOW, 0, 4096).ok()?.reply().ok()) else {
+            return Vec::new();
+        };
+        let ids: Vec<Window> = listed.value32().map(|ids| ids.collect()).unwrap_or_default();
+        ids.into_iter()
+            .filter_map(|window| {
+                let pid = self.number(window, b"_NET_WM_PID", AtomEnum::CARDINAL)?;
+                let (width, height) = self.size(window)?;
+                Some(Listed { window, pid, title: self.title(window), area: width as u32 * height as u32 })
+            })
+            .collect()
+    }
+
+    fn atom(&self, name: &[u8]) -> Option<u32> {
+        Some(self.conn.intern_atom(false, name).ok()?.reply().ok()?.atom)
+    }
+
+    /// The window's title: the UTF-8 one if it has it, else the old Latin-1 one.
+    fn title(&self, window: Window) -> String {
+        let read = |property: &[u8], kind: Option<u32>| {
+            let property = self.atom(property)?;
+            let value = self.conn.get_property(false, window, property, kind?, 0, 256).ok()?.reply().ok()?;
+            Some(value.value).filter(|v| !v.is_empty())
+        };
+        match read(b"_NET_WM_NAME", self.atom(b"UTF8_STRING")) {
+            Some(utf8) => String::from_utf8_lossy(&utf8).into_owned(),
+            None => read(b"WM_NAME", Some(AtomEnum::STRING.into())).map(|latin| latin.iter().map(|b| *b as char).collect()).unwrap_or_default(),
+        }
     }
 
     /// The largest window on screen that belongs to the process.
@@ -242,6 +297,15 @@ mod tests {
         let data = u32::from_be_bytes(file[33..37].try_into().unwrap()) as usize;
         let rows = miniz_oxide::inflate::decompress_to_vec_zlib(&file[41..41 + data]).unwrap();
         assert_eq!(rows, [0, 0x0F, 0x70, 0, 0x12, 0x30]);
+    }
+
+    #[test]
+    fn one_window_for_each_process() {
+        let window = |window, pid, area| Listed { window, pid, title: format!("w{window}"), area };
+        let all = vec![window(1, 10, 100), window(2, 11, 50), window(3, 10, 400), window(4, 0, 900), window(5, 99, 900), window(6, 12, 5)];
+        let kept: Vec<(u32, u32)> = by_process(all, 99).iter().map(|w| (w.window, w.pid)).collect();
+        // process 10 keeps its larger window, in the place of its first; 0 and the launcher itself are gone
+        assert_eq!(kept, [(3, 10), (2, 11), (6, 12)]);
     }
 
     #[test]

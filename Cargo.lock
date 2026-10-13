@@ -1444,6 +1444,7 @@ dependencies = [
  "encoding_rs",
  "gtk4",
  "gtk4-layer-shell",
+ "libc",
  "lzma-rs",
  "memchr",
  "miniz_oxide 0.8.9",
