@@ -1,11 +1,12 @@
 //! Looking words up without a browser: what is taken from Yomitan to find
-//! the dictionary form of the word a text starts with.
-//!
-//! Here so far: `candidates`, every text a dictionary may list the word
-//! under. Still to come: the dictionaries themselves and the lookup that
-//! asks them (see PLAN.md).
+//! the dictionary form of the word a text starts with (`candidates`), the
+//! dictionaries the reader imports (`store`, `import`) and the lookup that
+//! asks them (`lookup`).
 
 pub mod deinflect;
+pub mod import;
+pub mod lookup;
+pub mod store;
 pub mod variants;
 
 use std::sync::OnceLock;

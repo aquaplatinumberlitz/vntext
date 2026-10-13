@@ -13,9 +13,11 @@ serde_json = "1"
 ureq = { version = "3", features = ["json"] }
 lzma-rs = "0.3.0"
 x11rb = "0.14.0"
-gtk4 = "0.11.5"
+gtk4 = { version = "0.11.5", features = ["v4_10"] }
 gtk4-layer-shell = "0.8.1"
 libc = "0.2"
+rusqlite = { version = "0.37", features = ["bundled"] }
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [profile.release]
 opt-level = 3

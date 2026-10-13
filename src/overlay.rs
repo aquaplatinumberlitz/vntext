@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -20,6 +21,9 @@ use gtk4::{cairo, gdk, glib};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use serde_json::{json, Value};
 
+use crate::dict::import;
+use crate::dict::lookup::{self, Source, Trouble};
+use crate::dict::store::{Info, Store};
 use crate::screen::{Region, Screen};
 use crate::translate::{self, Service};
 use crate::{mem, ocr, web, yomitan};
@@ -36,8 +40,8 @@ const KEPT: usize = 200;
 const FONT: i32 = 22;
 const FONTS: std::ops::RangeInclusive<i32> = 10..=72;
 const NARROWEST: i32 = 200;
-/// How much of the text from the pointer on is given to Yomitan, which
-/// finds the longest word it starts with.
+/// How much of the text from the pointer on is looked up: the longest word
+/// it starts with is found.
 const LOOKED_UP: usize = 20;
 /// How wide the meaning of a word may be shown.
 const MEANING: i32 = 360;
@@ -94,7 +98,13 @@ window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
 .vntext .bar button.on { background: #e0a458; color: black; }
 .vntext .bar.menu { opacity: 1; background: rgba(24, 24, 24, 0.97); }
 .vntext-ask .box { background: #1e1e1e; border-radius: 10px; padding: 12px 14px; }
-.vntext-ask .box > label, .vntext-ask .box > box > label { color: #bbb; font-size: 12px; }
+.vntext-ask .box label { color: #bbb; font-size: 12px; }
+.vntext-ask .box button label { color: black; font-size: 13px; }
+.vntext-ask .box button.tab label { color: white; }
+.vntext-ask .box button.tab.on label { color: black; }
+.vntext-ask list, .vntext-ask row { background: #2c2c2c; }
+.vntext-ask scrolledwindow, .vntext-ask viewport { background: none; }
+.vntext-ask button.icon { background: #333; padding: 3px 6px; }
 .vntext-ask button.tab { background: #333; padding: 3px 9px; }
 .vntext-ask button.tab label { color: white; }
 .vntext-ask button.tab.on { background: #e0a458; }
@@ -348,12 +358,12 @@ struct Overlay {
     /// says who translates, and lets another be chosen
     service: gtk4::Button,
     grips: [gtk4::Label; 2],
-    /// the meaning of the word under the pointer, as Yomitan gives it
+    /// the meaning of the word under the pointer, from the dictionaries
     popup: gtk4::Window,
     meaning: gtk4::Box,
     scrolled: gtk4::ScrolledWindow,
     asks: Sender<(u64, String)>,
-    answers: Receiver<(u64, Result<yomitan::Found, String>)>,
+    answers: Receiver<(u64, Result<yomitan::Found, Trouble>)>,
     bar: gtk4::Window,
     hide: gtk4::Button,
     edit: gtk4::Button,
@@ -472,6 +482,246 @@ fn word(entry: &yomitan::Entry) -> gtk4::Box {
         }
     }
     all
+}
+
+/// A tab of the settings window.
+#[derive(Clone, Copy, PartialEq)]
+enum Tab {
+    Translate,
+    Dictionary,
+}
+
+impl Tab {
+    const ALL: [(Tab, &'static str, &'static str); 2] = [(Tab::Translate, "translate", "Dịch"), (Tab::Dictionary, "dictionary", "Từ điển")];
+
+    fn id(self) -> &'static str {
+        Tab::ALL.iter().find(|t| t.0 == self).unwrap().1
+    }
+}
+
+/// Where dictionaries are to be had.
+const DICTIONARIES: &str = "https://yomitan.wiki/dictionaries/";
+
+/// What the thread that imports dictionaries tells.
+enum Imported {
+    /// the file at this place of the list, and how much of it is read
+    Reading(usize, f64),
+    Added(String),
+    Failed(String, String),
+    Finished,
+}
+
+/// Reads the zip files in `paths` into the store, one after the other, until
+/// `cancel` is set.
+fn import_all(paths: Vec<PathBuf>, cancel: Arc<AtomicBool>, tell: Sender<Imported>) {
+    let result = Store::open().map(|mut store| {
+        for (at, path) in paths.iter().enumerate() {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let read = std::fs::File::open(path).map_err(|e| format!("Không mở được file: {e}")).and_then(|file| {
+                import::import(&mut store, std::io::BufReader::new(file), &mut |done, total| {
+                    let _ = tell.send(Imported::Reading(at, done as f64 / total.max(1) as f64));
+                    !cancel.load(Ordering::Relaxed)
+                })
+            });
+            let _ = tell.send(match read {
+                Ok(title) => Imported::Added(title),
+                Err(e) => Imported::Failed(name, e),
+            });
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+        }
+    });
+    if let Err(e) = result {
+        let _ = tell.send(Imported::Failed("kho từ điển".to_string(), e));
+    }
+    let _ = tell.send(Imported::Finished);
+}
+
+/// Lists the dictionaries imported, each with its switch, its place in the
+/// order and a button to remove it.
+fn fill_dictionaries(list: &gtk4::ListBox, note: &gtk4::Label) {
+    while let Some(old) = list.first_child() {
+        list.remove(&old);
+    }
+    let all = Store::open().and_then(|store| store.dictionaries());
+    let all: Vec<Info> = match all {
+        Ok(all) => all,
+        Err(e) => return note.set_text(&e),
+    };
+    if all.is_empty() {
+        list.append(&gtk4::Label::new(Some("Chưa có từ điển nào.")));
+    }
+    for info in all {
+        let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        let on = gtk4::Switch::new();
+        on.set_active(info.enabled);
+        on.set_valign(gtk4::Align::Center);
+        let id = info.id;
+        let told = note.clone();
+        on.connect_active_notify(move |on| {
+            if let Err(e) = Store::open().and_then(|store| store.enable(id, on.is_active())) {
+                told.set_text(&e);
+            }
+        });
+        let named = gtk4::Label::new(Some(&if info.revision.is_empty() { info.title.clone() } else { format!("{} ({})", info.title, info.revision) }));
+        named.set_xalign(0.0);
+        named.set_hexpand(true);
+        named.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        row.append(&on);
+        row.append(&named);
+        let act = |icon: &str, tip: &str, act: Box<dyn Fn(&mut Store) -> Result<(), String>>| {
+            let button = pictured(icon, tip);
+            button.add_css_class("icon");
+            let (list, note) = (list.clone(), note.clone());
+            button.connect_clicked(move |_| {
+                if let Err(e) = Store::open().and_then(|mut store| act(&mut store)) {
+                    note.set_text(&e);
+                }
+                fill_dictionaries(&list, &note);
+            });
+            row.append(&button);
+        };
+        act("go-up-symbolic", "Lên trước: nghĩa của từ điển này hiện sớm hơn", Box::new(move |store| store.shift(id, true)));
+        act("go-down-symbolic", "Xuống sau", Box::new(move |store| store.shift(id, false)));
+        act("user-trash-symbolic", "Xoá từ điển này khỏi tool", Box::new(move |store| store.remove(id)));
+        list.append(&row);
+    }
+}
+
+/// The tab of dictionaries: those imported, a way to import more (a file
+/// chosen, or dropped on the tab) and where words are looked up.
+fn dictionaries(window: &gtk4::Window) -> gtk4::Box {
+    let page = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    let list = gtk4::ListBox::new();
+    list.set_selection_mode(gtk4::SelectionMode::None);
+    let scroll = gtk4::ScrolledWindow::new();
+    scroll.set_child(Some(&list));
+    scroll.set_min_content_height(120);
+    scroll.set_max_content_height(240);
+    scroll.set_propagate_natural_height(true);
+    page.append(&scroll);
+    let note = gtk4::Label::new(None);
+    note.set_xalign(0.0);
+    note.set_wrap(true);
+    note.set_max_width_chars(48);
+    fill_dictionaries(&list, &note);
+
+    let progress = gtk4::ProgressBar::new();
+    let cancel = gtk4::Button::with_label("Huỷ");
+    let working = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    progress.set_hexpand(true);
+    progress.set_valign(gtk4::Align::Center);
+    working.append(&progress);
+    working.append(&cancel);
+    working.set_visible(false);
+
+    // the files named are read off this thread, and this one is told how far they are
+    let stopping: Rc<RefCell<Option<Arc<AtomicBool>>>> = Rc::default();
+    let begin = {
+        let (list, note, working, progress, stopping) = (list.clone(), note.clone(), working.clone(), progress.clone(), stopping.clone());
+        Rc::new(move |paths: Vec<PathBuf>| {
+            if paths.is_empty() || stopping.borrow().is_some() {
+                return;
+            }
+            let (cancel, (tell, told)) = (Arc::new(AtomicBool::new(false)), mpsc::channel());
+            *stopping.borrow_mut() = Some(cancel.clone());
+            let files = paths.len();
+            thread::spawn(move || import_all(paths, cancel, tell));
+            note.set_text("");
+            progress.set_fraction(0.0);
+            working.set_visible(true);
+            let (list, note, working, progress, stopping) = (list.clone(), note.clone(), working.clone(), progress.clone(), stopping.clone());
+            let (mut added, mut failed) = (Vec::new(), Vec::new());
+            glib::timeout_add_local(TICK, move || {
+                let mut finished = false;
+                for told in told.try_iter() {
+                    match told {
+                        Imported::Reading(at, share) => progress.set_fraction((at as f64 + share) / files as f64),
+                        Imported::Added(title) => added.push(title),
+                        Imported::Failed(name, e) => failed.push(format!("{name}: {e}")),
+                        Imported::Finished => finished = true,
+                    }
+                }
+                if !finished {
+                    return glib::ControlFlow::Continue;
+                }
+                *stopping.borrow_mut() = None;
+                working.set_visible(false);
+                fill_dictionaries(&list, &note);
+                let mut said = Vec::new();
+                if !added.is_empty() {
+                    said.push(format!("Đã thêm: {}.", added.join(", ")));
+                }
+                said.extend(failed.drain(..));
+                note.set_text(&said.join("\n"));
+                glib::ControlFlow::Break
+            });
+        })
+    };
+    let stop = stopping.clone();
+    cancel.connect_clicked(move |_| {
+        if let Some(cancel) = stop.borrow().as_ref() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    });
+
+    let buttons = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let add = gtk4::Button::with_label("Thêm từ điển…");
+    let download = gtk4::Button::with_label("Tải từ điển");
+    download.set_tooltip_text(Some(DICTIONARIES));
+    buttons.append(&add);
+    buttons.append(&download);
+    page.append(&buttons);
+    let how = gtk4::Label::new(Some("Tải file zip về rồi thêm vào đây, không cần giải nén. Cũng kéo thả file zip vào tab này được."));
+    how.set_xalign(0.0);
+    how.set_wrap(true);
+    how.set_max_width_chars(48);
+    page.append(&how);
+    page.append(&working);
+    page.append(&note);
+
+    let chosen = gtk4::DropDown::from_strings(&Source::ALL.map(|s| s.2));
+    chosen.set_selected(Source::ALL.iter().position(|s| s.0 == lookup::source()).unwrap_or(0) as u32);
+    chosen.connect_selected_notify(|chosen| lookup::set_source(Source::ALL.get(chosen.selected() as usize).map_or(Source::Auto, |s| s.0)));
+    let wanted = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let nth = gtk4::Label::new(Some("Tra từ bằng"));
+    nth.set_hexpand(true);
+    nth.set_xalign(0.0);
+    wanted.append(&nth);
+    wanted.append(&chosen);
+    page.append(&wanted);
+
+    download.connect_clicked(move |_| {
+        let _ = gtk4::gio::AppInfo::launch_default_for_uri(DICTIONARIES, None::<&gtk4::gio::AppLaunchContext>);
+    });
+    // The window floats above every other, so it steps aside while the
+    // dialog is open, and comes back when it is closed.
+    let aside = window.clone();
+    let reading = begin.clone();
+    add.connect_clicked(move |_| {
+        let filter = gtk4::FileFilter::new();
+        filter.add_suffix("zip");
+        filter.set_name(Some("Từ điển Yomitan (.zip)"));
+        let filters = gtk4::gio::ListStore::new::<gtk4::FileFilter>();
+        filters.append(&filter);
+        let dialog = gtk4::FileDialog::builder().title("Chọn từ điển").filters(&filters).build();
+        aside.set_visible(false);
+        let (back, reading) = (aside.clone(), reading.clone());
+        dialog.open_multiple(None::<&gtk4::Window>, gtk4::gio::Cancellable::NONE, move |files| {
+            back.set_visible(true);
+            let files = files.map(|files| files.into_iter().flatten().filter_map(|f| f.downcast::<gtk4::gio::File>().ok()).filter_map(|f| f.path()).collect()).unwrap_or_default();
+            reading(files);
+        });
+    });
+    let dropped = gtk4::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
+    dropped.connect_drop(move |_, value, _, _| {
+        let paths: Vec<PathBuf> = value.get::<gdk::FileList>().map(|files| files.files().into_iter().filter_map(|f| f.path()).collect()).unwrap_or_default();
+        begin(paths);
+        true
+    });
+    page.add_controller(dropped);
+    page
 }
 
 fn switch(button: &gtk4::Button, on: bool) {
@@ -628,9 +878,9 @@ impl Overlay {
         self.place();
     }
 
-    /// Asks Yomitan for the word under the pointer, and shows what it has
-    /// answered by the strip, the word marked in the message.
-    fn look_up(&self, ui: &mut Ui) {
+    /// Looks up the word under the pointer, and shows what was found by the
+    /// strip, the word marked in the message.
+    fn look_up(self: &Rc<Self>, ui: &mut Ui) {
         // The meaning stays while the pointer is on its word or on the
         // meaning itself, and a moment longer: the way from one to the
         // other leads over neither.
@@ -680,9 +930,21 @@ impl Overlay {
                     self.meaning.append(&word(entry));
                 }
             }
-            Err(e) => {
+            Err(Trouble::NoDictionary) => {
+                self.meaning.append(&said("gloss", "<span foreground='#e0a458'>Chưa có từ điển</span>\nTải một từ điển của Yomitan (file zip) rồi thêm vào tool."));
+                let open = gtk4::Button::with_label("Mở tab Từ điển");
+                open.set_halign(gtk4::Align::Start);
+                open.set_focusable(false);
+                let overlay = self.clone();
+                open.connect_clicked(move |_| overlay.set_up(Tab::Dictionary));
+                self.meaning.append(&open);
+            }
+            Err(Trouble::Yomitan(e)) => {
                 let how = "Mở Firefox, vào Yomitan Settings, bật Advanced ở góc dưới trái, rồi bật General → Enable Yomitan API.";
                 self.meaning.append(&said("gloss", &format!("<span foreground='#e0a458'>Chưa hỏi được Yomitan</span>\n{}\n{how}", yomitan::escape(&e))));
+            }
+            Err(Trouble::Store(e)) => {
+                self.meaning.append(&said("gloss", &format!("<span foreground='#e0a458'>Chưa tra được trong kho từ điển</span>\n{}", yomitan::escape(&e))));
             }
         }
         self.scrolled.vadjustment().set_value(0.0);
@@ -922,16 +1184,15 @@ impl Overlay {
         button
     }
 
-    /// Lets the reader choose who translates and set that service up, in a
-    /// small window over the game. The service shown when it is saved is
-    /// the one that translates from then on.
-    fn set_up(self: &Rc<Self>) {
+    /// The settings of the strip, in a small window over the game: who
+    /// translates, set up on the first tab (the service shown when it is
+    /// saved is the one that translates from then on), and the dictionaries.
+    fn set_up(self: &Rc<Self>, tab: Tab) {
         let Some((x, y, width, height)) = self.ui.borrow().placed else { return };
         let window = floating("vntext-ask");
         // typing needs the keyboard, which a floating surface otherwise never takes
         window.set_keyboard_mode(KeyboardMode::Exclusive);
         let content = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
-        content.add_css_class("box");
         let asked = gtk4::Label::new(Some("Nguồn dịch · Enter để lưu · Esc để huỷ"));
         asked.set_xalign(0.0);
         content.append(&asked);
@@ -974,7 +1235,30 @@ impl Overlay {
         let save = gtk4::Button::with_label("Lưu");
         save.set_halign(gtk4::Align::End);
         content.append(&save);
-        window.set_child(Some(&content));
+        let pages = gtk4::Stack::new();
+        pages.add_named(&content, Some(Tab::Translate.id()));
+        pages.add_named(&dictionaries(&window), Some(Tab::Dictionary.id()));
+        let outer = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+        outer.add_css_class("box");
+        let tabbed = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+        let buttons: Rc<RefCell<Vec<(Tab, gtk4::Button)>>> = Rc::default();
+        for (this, id, name) in Tab::ALL {
+            let button = gtk4::Button::with_label(name);
+            button.add_css_class("tab");
+            button.set_focusable(false);
+            let (pages, buttons_) = (pages.clone(), buttons.clone());
+            button.connect_clicked(move |_| {
+                pages.set_visible_child_name(id);
+                buttons_.borrow().iter().for_each(|(t, b)| switch(b, *t == this));
+            });
+            tabbed.append(&button);
+            buttons.borrow_mut().push((this, button));
+        }
+        outer.append(&tabbed);
+        outer.append(&pages);
+        window.set_child(Some(&outer));
+        pages.set_visible_child_name(tab.id());
+        buttons.borrow().iter().for_each(|(t, b)| switch(b, *t == tab));
         window.set_margin(Edge::Left, (x + width / 2 - 230).max(0));
         window.set_margin(Edge::Top, (y + height / 2 - 200).max(0));
 
@@ -1167,7 +1451,7 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
     framed.add_css_class("meaning");
     framed.append(&scrolled);
     popup.set_child(Some(&framed));
-    // lookups wait for the browser, so they are made off this thread
+    // a lookup may wait for the browser or a big dictionary, so it is made off this thread
     let (asks, asked) = mpsc::channel::<(u64, String)>();
     let (answer, answers) = mpsc::channel();
     thread::spawn(move || {
@@ -1176,7 +1460,7 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
             while let Ok(later) = asked.try_recv() {
                 ask = later;
             }
-            if answer.send((ask.0, yomitan::lookup(&ask.1))).is_err() {
+            if answer.send((ask.0, lookup::find(&ask.1))).is_err() {
                 return;
             }
         }
@@ -1288,7 +1572,7 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
     let chooser = overlay.clone();
     overlay.service.connect_clicked(move |_| chooser.choose_service());
     buttons.append(&overlay.button("edit-select-all-symbolic", "Khoanh lại khung thoại cho OCR", |o| o.pick(false)));
-    buttons.append(&overlay.button("dialog-password-symbolic", "Chọn nguồn dịch (Gemini, OpenAI, Claude, DeepSeek, server local, Google) và nhập API key", |o| o.set_up()));
+    buttons.append(&overlay.button("dialog-password-symbolic", "Chọn nguồn dịch (Gemini, OpenAI, Claude, DeepSeek, server local, Google) và nhập API key", |o| o.set_up(Tab::Translate)));
 
     overlay.dragging(&overlay.grips[0], |place, dx, dy| (place.0, place.1) = (place.0 + dx, place.1 + dy));
     overlay.dragging(&overlay.grips[1], |place, dx, _| place.2 += dx);

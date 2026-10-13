@@ -108,7 +108,17 @@ Dải nằm ngay dưới cửa sổ game (hết chỗ thì ở mép trên bên t
 
 Cụm nút bên phải cửa sổ game, từ trên xuống: ẩn/hiện dải; mở khoá dải (kéo `⠿` để dời, kéo `↔` để đổi bề rộng, lăn chuột để đổi cỡ chữ, quét chữ để chép); đổi giữa bản dịch, câu Nhật, cả hai; chữ to, chữ nhỏ; câu trước, câu sau; đưa về thiết lập ban đầu; chép câu đang hiện; bật/tắt OCR; khoanh lại khung thoại; thiết lập nguồn dịch. Thiết lập của dải lưu theo từng game trong `~/.config/vntext/overlay.json`.
 
-Ở chế độ chỉ hiện bản dịch, click xuyên qua dải xuống bên dưới. Khi dải hiện chữ Nhật, rê chuột lên một từ là nghĩa của từ đó hiện ra trong khung bên cạnh, lấy từ Yomitan của trình duyệt. Việc này cần:
+Ở chế độ chỉ hiện bản dịch, click xuyên qua dải xuống bên dưới. Khi dải hiện chữ Nhật, rê chuột lên một từ là nghĩa của từ đó hiện ra trong khung bên cạnh. Nghĩa lấy từ từ điển đã nhập vào tool, hoặc từ Yomitan của trình duyệt.
+
+### Từ điển
+
+Tool không tự tải từ điển nào. Bấm "Tải từ điển" ở tab "Từ điển" của hộp cài đặt (nút ổ khoá trên cụm nút) để mở <https://yomitan.wiki/dictionaries/> bằng trình duyệt, tải file zip về, rồi "Thêm từ điển…" (chọn nhiều file được) hoặc kéo thả file zip vào tab đó. Không cần giải nén. Hỗ trợ từ điển của Yomitan định dạng bản 3: nghĩa, tần suất (`freq`) và nhãn; ảnh và dữ liệu cao độ/IPA bị bỏ qua. Nhập trùng tên thì thay bản cũ. Đang nhập thì có thanh tiến độ và nút huỷ; huỷ hay lỗi thì không đổi gì.
+
+Mỗi từ điển có công tắc bật/tắt, nút lên/xuống để đổi thứ tự (từ điển trước hiện nghĩa trước) và nút xoá. Kho nằm ở `~/.local/share/vntext/dict.sqlite`.
+
+Chữ chia (食べた, 書いていない…) được đưa về dạng gốc bằng bảng luật của Yomitan 26.9.8.0, nên cho ra cùng kết quả như Yomitan; từ dài nhất hiện trước, rồi tới các từ ngắn hơn bắt đầu từ cùng chỗ.
+
+Ô "Tra từ bằng" chọn nguồn: "Từ điển trong tool", "Yomitan (Firefox)", hoặc "Tự chọn" (mặc định: có từ điển đã nhập thì dùng nó, chưa có mà Yomitan trả lời thì dùng Yomitan, chưa có cả hai thì popup báo "Chưa có từ điển" kèm nút mở tab này). Lựa chọn lưu ở `~/.config/vntext/lookup.json`. Dùng Yomitan của trình duyệt cần:
 
 1. [yomitan-api](https://github.com/yomidevs/yomitan-api) đã cài và đăng ký với trình duyệt (Firefox: file `~/.mozilla/native-messaging-hosts/yomitan_api.json`).
 2. Trong Yomitan Settings bật Advanced, rồi bật General → Enable Yomitan API.
@@ -210,7 +220,15 @@ src/
   ocr.rs             Đọc khung thoại từ ảnh chụp qua Gemini
   screen.rs          Liệt kê, tìm và chụp cửa sổ game qua X11, nén ảnh
   overlay.rs         Dải nổi và cụm nút cạnh cửa sổ game (GTK4, layer-shell)
-  yomitan.rs         Tra từ qua API của Yomitan
+  yomitan.rs         Tra từ qua API của Yomitan; đổi nội dung từ điển (structured content) thành markup cho popup
+  dict/
+    mod.rs           Các chuỗi mà từ điển có thể liệt kê cho một đoạn chữ (`candidates`)
+    deinflect.rs     Máy chia ngược, bản Rust của LanguageTransformer của Yomitan
+    variants.rs      Các cách viết khác của một đoạn chữ
+    japanese.json    Luật và bảng ký tự xuất từ Yomitan (tools/yomitan-dump.mjs)
+    store.rs         Kho từ điển SQLite
+    import.rs        Nhập file zip từ điển của Yomitan
+    lookup.rs        Tra đoạn chữ trong kho hoặc qua Yomitan, theo nguồn đã chọn
   web.rs             Máy chủ trang web, đẩy sự kiện tới trình duyệt
   page.html          Trang hiển thị cho Yomitan
 ```

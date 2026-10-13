@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 const API: &str = "http://127.0.0.1:19633/termEntries";
 const WITHIN: Duration = Duration::from_secs(3);
 /// Entries of a word that are kept.
-const ENTRIES: usize = 6;
+pub const ENTRIES: usize = 6;
 /// Parts of a dictionary's entry that are left out: where it has its text
 /// from, and the table of other spellings.
 const LEFT_OUT: [&str; 3] = ["attribution", "attribution-footnote", "forms"];
@@ -85,48 +85,65 @@ fn found(reply: &Value, text: &str) -> Found {
         let (Some(term), reading) = (headword["term"].as_str(), headword["reading"].as_str().unwrap_or_default()) else { continue };
         let named = |of: &Value| of["dictionaryAlias"].as_str().filter(|a| !a.is_empty()).or(of["dictionary"].as_str()).unwrap_or_default().to_string();
 
-        // the numbers of one counter are put together: "9425, 10426"
         let mut frequencies: Vec<(String, String)> = Vec::new();
         for frequency in list(&entry["frequencies"]) {
             let number = frequency["displayValue"].as_str().map(str::to_string).or_else(|| frequency["frequency"].as_u64().map(|n| n.to_string()));
-            let (Some(number), counter) = (number, named(frequency)) else { continue };
-            match frequencies.iter_mut().find(|f| f.0 == counter) {
-                Some(known) => known.1 = format!("{}, {number}", known.1),
-                None => frequencies.push((counter, number)),
+            if let Some(number) = number {
+                add_frequency(&mut frequencies, named(frequency), number);
             }
         }
         let mut definitions: Vec<Definition> = Vec::new();
         for definition in list(&entry["definitions"]) {
-            let mut tags: Vec<(String, String)> = Vec::new();
-            for tag in list(&definition["tags"]) {
-                let tag = (tag["name"].as_str().unwrap_or_default().to_string(), tag["category"].as_str().unwrap_or_default().to_string());
-                if !tag.0.is_empty() && !UNMARKED.contains(&tag.1.as_str()) && !tags.contains(&tag) {
-                    tags.push(tag);
-                }
-            }
-            let mut writer = Writer::default();
-            for part in list(&definition["entries"]) {
-                let content = if part["type"] == "structured-content" { &part["content"] } else if part["type"] == "text" { &part["text"] } else { part };
-                writer.write(content);
-                writer.line();
-            }
-            let blocks = writer.done();
-            if blocks.is_empty() {
-                continue;
-            }
-            // what one dictionary says in several places is put together
-            let dictionary = named(definition);
-            match definitions.iter_mut().find(|d| d.dictionary == dictionary) {
-                Some(known) => {
-                    known.blocks.extend(blocks);
-                    tags.into_iter().for_each(|tag| if !known.tags.contains(&tag) { known.tags.push(tag) });
-                }
-                None => definitions.push(Definition { dictionary, tags, blocks }),
-            }
+            let tags = list(&definition["tags"]).map(|tag| (tag["name"].as_str().unwrap_or_default().to_string(), tag["category"].as_str().unwrap_or_default().to_string()));
+            let parts: Vec<&Value> = list(&definition["entries"]).collect();
+            add_definition(&mut definitions, named(definition), tags, blocks(parts));
         }
         entries.push(Entry { term: term.to_string(), reading: reading.to_string(), frequencies, definitions });
     }
     Found { length, entries }
+}
+
+/// Adds a count of a word to what the counter `counter` has said of it: the
+/// numbers of one counter are put together, "9425, 10426".
+pub fn add_frequency(frequencies: &mut Vec<(String, String)>, counter: String, number: String) {
+    match frequencies.iter_mut().find(|f| f.0 == counter) {
+        Some(known) => known.1 = format!("{}, {number}", known.1),
+        None => frequencies.push((counter, number)),
+    }
+}
+
+/// What a dictionary says of a word, from the items of its glossary (text,
+/// structured content, or Yomitan's own entries), as blocks of markup.
+pub fn blocks<'a>(parts: impl IntoIterator<Item = &'a Value>) -> Vec<Block> {
+    let mut writer = Writer::default();
+    for part in parts {
+        let content = if part["type"] == "structured-content" { &part["content"] } else if part["type"] == "text" { &part["text"] } else { part };
+        writer.write(content);
+        writer.line();
+    }
+    writer.done()
+}
+
+/// Adds what a dictionary says to the definitions of a word, to the
+/// dictionary's own if it has one there. A mark is a name and the kind of
+/// mark; kinds that say nothing to a reader are left out.
+pub fn add_definition(definitions: &mut Vec<Definition>, dictionary: String, marks: impl IntoIterator<Item = (String, String)>, blocks: Vec<Block>) {
+    if blocks.is_empty() {
+        return;
+    }
+    let mut tags: Vec<(String, String)> = Vec::new();
+    for tag in marks {
+        if !tag.0.is_empty() && !UNMARKED.contains(&tag.1.as_str()) && !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    match definitions.iter_mut().find(|d| d.dictionary == dictionary) {
+        Some(known) => {
+            known.blocks.extend(blocks);
+            tags.into_iter().for_each(|tag| if !known.tags.contains(&tag) { known.tags.push(tag) });
+        }
+        None => definitions.push(Definition { dictionary, tags, blocks }),
+    }
 }
 
 pub fn escape(text: &str) -> String {
