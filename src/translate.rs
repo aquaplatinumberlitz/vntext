@@ -104,6 +104,11 @@ pub fn chosen() -> Service {
     setups()["use"].as_str().and_then(Service::named).unwrap_or(Service::Gemini)
 }
 
+/// The service the reader has chosen, if one ever was.
+pub fn explicit() -> Option<Service> {
+    setups()["use"].as_str().and_then(Service::named)
+}
+
 /// A service as set up: what was saved, or else its key from the
 /// environment and what is known of it.
 pub fn setup(service: Service) -> Setup {

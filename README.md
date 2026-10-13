@@ -144,7 +144,8 @@ Các lệnh khác:
 | Lệnh | Tác dụng |
 |---|---|
 | (không tham số) | Mở cửa sổ chọn game |
-| `install` | Thêm vntext vào menu ứng dụng |
+| `install` | Thêm vntext vào menu ứng dụng, và đặt lệnh `vntext` ở `~/.local/bin` nếu thư mục đó có trên PATH |
+| `doctor` | Kiểm tra máy có đủ thứ tool cần không, nói thiếu gì và sửa thế nào |
 | `auto <pid\|tên>` | Theo dõi và in đoạn thoại mới của game có profile; tự nhận engine |
 | `ocr <pid\|tên>` | Đọc khung thoại từ ảnh chụp qua Gemini, cho game chưa có profile |
 | `strings <pid\|tên>` | In mọi chuỗi tiếng Nhật đang có trong bộ nhớ. Dùng để khảo sát game mới |
@@ -153,7 +154,40 @@ Các lệnh khác:
 
 Tuỳ chọn chung: `--clip` (đưa vào clipboard qua `wl-copy`), `--all` (quét cả vùng chỉ đọc), `--min N` (độ dài chuỗi tối thiểu). Khi có profile engine: `--raw` in text nguyên dạng engine lưu, gồm cả mã điều khiển; `--debug` in mọi lần một ô vị trí đổi giá trị, dùng khi tool hiện sai đoạn hoặc đứng im.
 
-## Cài trên máy mới
+## Cài cho người mới
+
+Tool được chia sẻ bằng source: bạn tự build, không có gói cài sẵn.
+
+1. **Cài Rust** (<https://rustup.rs>) và các gói hệ thống:
+
+   | Cần | Arch | Debian/Ubuntu |
+   |---|---|---|
+   | GTK4 | `gtk4` | `libgtk-4-dev` |
+   | layer-shell cho dải nổi | `gtk4-layer-shell` | `libgtk4-layer-shell-dev` |
+   | nút chép | `wl-clipboard` | `wl-clipboard` |
+   | trình biên dịch C (build SQLite đi kèm) | `base-devel` | `build-essential` |
+
+   Cần phiên Wayland có layer-shell (KDE Plasma, Sway, Hyprland; GNOME không có) và game chạy qua Wine/Proton dưới dạng cửa sổ X11 (XWayland).
+2. **Build:** `cargo build --release`
+3. **Đưa vào menu:** `./target/release/vntext install`. Từ đó mở vntext từ menu ứng dụng bằng chuột; nếu `~/.local/bin` có trên PATH thì gõ `vntext` cũng được.
+4. Mở cửa sổ vntext. Nếu máy thiếu gì, đầu cửa sổ hiện khung báo thiếu gì và sửa thế nào (cùng nội dung với `vntext doctor`). Chưa có key nào thì Dịch được bật sẵn với Google Dịch.
+
+Tool báo thiếu gì thì làm nấy:
+
+| Tool báo | Làm |
+|---|---|
+| "Dải nổi": GNOME không có layer-shell | Dùng KDE Plasma, Sway hoặc Hyprland |
+| "Dải nổi": không phải phiên Wayland | Đăng xuất, chọn phiên Wayland ở màn hình đăng nhập |
+| "Cửa sổ X11 (XWayland)" | Cài `xorg-xwayland` (Arch) / `xwayland` (Debian/Ubuntu) |
+| "Đọc bộ nhớ game": `ptrace_scope` khác 0, hoặc game ghi "bị từ chối đọc bộ nhớ" | Bấm "Cho phép" trong khung báo (hỏi mật khẩu, ghi `/etc/sysctl.d/90-vntext-ptrace.conf` và áp dụng ngay). Thiết lập này cho mọi chương trình của cùng người dùng đọc bộ nhớ của nhau. Làm tay: `sudo sysctl kernel.yama.ptrace_scope=0` |
+| "Nút chép (wl-copy)" | Cài `wl-clipboard` |
+| "Tra từ" | Tab "Từ điển" của hộp cài đặt: tải và thêm một từ điển Yomitan; hoặc bật Yomitan API trong Firefox |
+
+Không dùng `setcap` cho file chạy: file có capability bị coi là chương trình đặc quyền, GLib hạn chế nhiều thứ, và mỗi lần build lại phải cấp lại.
+
+Repo không chứa key, cache dịch hay cấu hình riêng: những thứ đó nằm ở `~/.config/vntext/`, `~/.cache/vntext/` và `~/.local/share/vntext/`, ngoài repo.
+
+## Cài trên máy mới (chi tiết)
 
 Tool không ghi nhớ thứ gì gắn với một máy: mỗi lần chạy nó đọc lại script từ thư mục của game đang mở và quét lại bộ nhớ để tìm vị trí đọc theo nội dung, không theo địa chỉ cố định. Địa chỉ vốn đã đổi mỗi lần mở game, nên đổi máy, đổi RAM hay cài lại hệ điều hành không cần chỉnh gì trong code. Phần này mới suy ra từ cách tool hoạt động, chưa thử trên máy thứ hai.
 
@@ -181,7 +215,8 @@ Lưu ý khi tìm game theo tên: Linux chỉ giữ 15 byte đầu của tên pro
 src/
   main.rs            Dòng lệnh và các vòng lặp chính
   launcher.rs        Cửa sổ chọn game (GTK4) khi chạy không tham số; chạy phần đọc như tiến trình con
-  install.rs         `vntext install`: ghi file .desktop vào menu ứng dụng
+  install.rs         `vntext install`: ghi file .desktop vào menu ứng dụng, đặt liên kết ở ~/.local/bin
+  doctor.rs          `vntext doctor` và khung kiểm tra máy trong cửa sổ chọn game; nút "Cho phép" đọc bộ nhớ
   mem.rs             Đọc bộ nhớ process khác
   text.rs            Tìm chuỗi tiếng Nhật trong dữ liệu thô (cho các lệnh khảo sát)
   engines/

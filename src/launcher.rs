@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 
 use crate::screen::{by_process, Screen};
 use crate::translate::{self, Service};
-use crate::{engines, install, mem, ocr};
+use crate::{doctor, engines, install, mem, ocr};
 
 const TICK: Duration = Duration::from_millis(200);
 /// Ticks between two looks at the windows on screen.
@@ -82,9 +82,19 @@ impl Options {
     }
 }
 
-/// What a game is read with unless the reader says otherwise.
+/// What a game is read with unless the reader says otherwise: for one who
+/// has no key to translate with, and has not chosen a service of their own
+/// (`chosen`), translated by Google, which needs none.
+fn fresh_for(chosen: Option<Service>, any_key: bool) -> Options {
+    if !any_key && chosen != Some(Service::Local) {
+        return Options { translate: true, to: "vi".to_string(), via: Service::Google, web: false };
+    }
+    Options { translate: false, to: "vi".to_string(), via: chosen.unwrap_or(Service::Gemini), web: false }
+}
+
 fn fresh() -> Options {
-    Options { translate: false, to: "vi".to_string(), via: translate::chosen(), web: false }
+    let any_key = translate::SERVICES.iter().any(|k| k.service.keyed() && !translate::setup(k.service).key.is_empty());
+    fresh_for(translate::explicit(), any_key)
 }
 
 /// The file of options: a JSON object with the options of each game, by the
@@ -134,9 +144,13 @@ impl Kind {
     }
 }
 
+/// What a game that cannot be looked into because of the system's permissions says.
+const DENIED: &str = "bị từ chối đọc bộ nhớ game, xem mục kiểm tra ở trên";
+
 fn recognise(pid: u32) -> Kind {
     match mem::Proc::open(pid) {
         Ok(p) => engines::detect(&p).map_or(Kind::Unknown, |engine| Kind::Profile(engine.name())),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Kind::Failed(DENIED.to_string()),
         Err(e) => Kind::Failed(format!("không mở được tiến trình: {e}")),
     }
 }
@@ -184,6 +198,10 @@ struct Launcher {
     kinds: RefCell<HashMap<u32, Kind>>,
     found: (Sender<(u32, Kind)>, Receiver<(u32, Kind)>),
     ended: (Sender<Exit>, Receiver<Exit>),
+    /// what is wrong with the machine, one block for each thing
+    checks: gtk4::Box,
+    checked: (Sender<doctor::Env>, Receiver<doctor::Env>),
+    allowed: (Sender<Result<(), String>>, Receiver<Result<(), String>>),
     options: gtk4::Box,
     translate: gtk4::Switch,
     language: gtk4::DropDown,
@@ -294,6 +312,19 @@ impl Launcher {
                 self.kinds.borrow_mut().insert(pid, kind);
             }
         }
+        if let Some(env) = self.checked.1.try_iter().last() {
+            self.show_checks(&env);
+        }
+        if let Some(allowed) = self.allowed.1.try_iter().last() {
+            match allowed {
+                Ok(()) => {
+                    self.status.set_text("Đã cho phép đọc bộ nhớ game.");
+                    self.recognise_again();
+                }
+                Err(e) => self.status.set_text(&e),
+            }
+            self.check();
+        }
         let ended: Vec<Exit> = self.ended.1.try_iter().collect();
         for exit in ended {
             self.returned(exit);
@@ -305,6 +336,77 @@ impl Launcher {
                 self.refresh();
             }
             self.show_options();
+        }
+    }
+
+    /// Checks the machine, off this thread: the answer comes back to `tick`.
+    fn check(self: &Rc<Self>) {
+        let layer_shell = gtk4_layer_shell::is_supported();
+        let found = self.checked.0.clone();
+        thread::spawn(move || {
+            let _ = found.send(doctor::gather(layer_shell));
+        });
+    }
+
+    /// Lists what is wrong with the machine, how to put it right, and a
+    /// button where one can.
+    fn show_checks(self: &Rc<Self>, env: &doctor::Env) {
+        while let Some(old) = self.checks.first_child() {
+            self.checks.remove(&old);
+        }
+        let wrong: Vec<doctor::Check> = doctor::checks(env).into_iter().filter(|c| !c.ok).collect();
+        self.checks.set_visible(!wrong.is_empty());
+        for check in wrong {
+            let block = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+            block.add_css_class("card");
+            margins(&block, 8, 12);
+            block.append(&label(check.name, &["heading"]));
+            block.append(&label(&check.said, &[]));
+            block.append(&label(&check.fix, &["dim-label"]));
+            if check.allowable {
+                let allow = gtk4::Button::with_label("Cho phép");
+                allow.set_halign(gtk4::Align::Start);
+                let launcher = self.clone();
+                allow.connect_clicked(move |_| launcher.allow());
+                block.append(&allow);
+            }
+            self.checks.append(&block);
+        }
+    }
+
+    /// Explains what allowing the reading of memory means, and if the reader
+    /// agrees, has the system do it (it asks for the password).
+    fn allow(self: &Rc<Self>) {
+        let dialog = gtk4::AlertDialog::builder()
+            .message("Cho phép tool đọc bộ nhớ của game?")
+            .detail("Thiết lập này cho mọi chương trình của cùng người dùng đọc bộ nhớ của nhau; trên Arch nó là mặc định. Tool sẽ ghi kernel.yama.ptrace_scope = 0 vào /etc/sysctl.d/90-vntext-ptrace.conf và áp dụng ngay. Hệ thống sẽ hỏi mật khẩu.")
+            .buttons(["Huỷ", "Cho phép"])
+            .cancel_button(0)
+            .default_button(1)
+            .modal(true)
+            .build();
+        let answered = self.allowed.0.clone();
+        dialog.choose(Some(&self.window), gtk4::gio::Cancellable::NONE, move |chosen| {
+            if chosen.is_ok_and(|button| button == 1) {
+                thread::spawn(move || {
+                    let _ = answered.send(doctor::allow_ptrace());
+                });
+            }
+        });
+    }
+
+    /// Looks into the games that could not be looked into before.
+    fn recognise_again(self: &Rc<Self>) {
+        let pids: Vec<u32> = self.rows.borrow().iter().map(|r| r.pid).filter(|pid| matches!(self.kind_of(*pid), Kind::Failed(_))).collect();
+        for pid in pids {
+            self.kinds.borrow_mut().remove(&pid);
+            if let Some(row) = self.rows.borrow().iter().find(|r| r.pid == pid) {
+                row.detail.set_text(&format!("{} · {}", row.game, Kind::Looking.said()));
+            }
+            let found = self.found.0.clone();
+            thread::spawn(move || {
+                let _ = found.send((pid, recognise(pid)));
+            });
         }
     }
 
@@ -436,6 +538,7 @@ impl Launcher {
         self.services();
         self.window.present();
         self.refresh();
+        self.check();
     }
 }
 
@@ -453,6 +556,9 @@ fn build() -> Option<gtk4::Window> {
     let page = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
     margins(&page, 14, 14);
     page.append(&label("Chọn game đang chạy để đọc", &["title-3"]));
+    let checks = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    checks.set_visible(false);
+    page.append(&checks);
     let list = gtk4::ListBox::new();
     list.set_selection_mode(gtk4::SelectionMode::Browse);
     list.add_css_class("boxed-list");
@@ -497,6 +603,9 @@ fn build() -> Option<gtk4::Window> {
         kinds: RefCell::default(),
         found: mpsc::channel(),
         ended: mpsc::channel(),
+        checks,
+        checked: mpsc::channel(),
+        allowed: mpsc::channel(),
         options,
         translate: translate_on.clone(),
         language: language.clone(),
@@ -526,12 +635,20 @@ fn build() -> Option<gtk4::Window> {
     service.connect_selected_notify(move |_| kept.keep());
     let reading = launcher.clone();
     start.connect_clicked(move |_| reading.read());
-    menu.connect_clicked(move |_| match install::menu() {
-        Ok(file) => status.set_text(&format!("Đã thêm vào menu ứng dụng ({}).", file.display())),
+    menu.connect_clicked(move |_| match install::all() {
+        Ok(done) => {
+            let link = match done.link {
+                Some(Ok(link)) => format!(" Lệnh vntext cũng có ở {}.", link.display()),
+                Some(Err(e)) => format!(" {e}"),
+                None => String::new(),
+            };
+            status.set_text(&format!("Đã thêm vào menu ứng dụng ({}).{link}", done.entry.display()));
+        }
         Err(e) => status.set_text(&e),
     });
 
     launcher.refresh();
+    launcher.check();
     let ticking = launcher.clone();
     glib::timeout_add_local(TICK, move || {
         ticking.tick();
@@ -580,6 +697,18 @@ mod tests {
         // a game never opened, or a file with parts missing or wrong
         assert_eq!(Options::from_json(&Value::Null, &fresh), fresh);
         assert_eq!(Options::from_json(&json!({"translate": true, "to": "xx", "via": "nobody"}), &fresh), Options { translate: true, ..fresh });
+    }
+
+    #[test]
+    fn those_with_no_key_translate_with_google() {
+        let google = Options { translate: true, to: "vi".to_string(), via: Service::Google, web: false };
+        assert_eq!(fresh_for(None, false), google);
+        // one who set up a service without a key is no different
+        assert_eq!(fresh_for(Some(Service::Claude), false), google);
+        // one who has a key, or runs a server of their own, is left as they were
+        assert_eq!(fresh_for(Some(Service::Claude), true), Options { translate: false, to: "vi".to_string(), via: Service::Claude, web: false });
+        assert_eq!(fresh_for(None, true).via, Service::Gemini);
+        assert_eq!(fresh_for(Some(Service::Local), false), Options { translate: false, to: "vi".to_string(), via: Service::Local, web: false });
     }
 
     #[test]

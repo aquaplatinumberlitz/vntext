@@ -1,4 +1,5 @@
 mod dict;
+mod doctor;
 mod engines;
 mod install;
 mod launcher;
@@ -29,6 +30,7 @@ vntext - read Japanese text out of a running game or emulator
 usage:
   vntext                                                 open the window that lists running games
   vntext install                                         put vntext in the application menu
+  vntext doctor                                          check what vntext needs on this machine
   vntext auto    <pid|name> [--clip]                     follow a game whose engine has a profile
   vntext ocr     <pid|name> [--pick] [--clip]            read the text box of any game from pictures of it
                                                          (needs a Gemini API key)
@@ -133,7 +135,10 @@ fn die(msg: &str) -> ! {
 
 fn open(target: &str) -> Proc {
     let pid = mem::resolve(target).unwrap_or_else(|e| die(&e));
-    Proc::open(pid).unwrap_or_else(|e| die(&format!("cannot open pid {pid}: {e}")))
+    Proc::open(pid).unwrap_or_else(|e| {
+        let hint = if e.kind() == std::io::ErrorKind::PermissionDenied { "\nreading another process's memory is not allowed here; `vntext doctor` says how to allow it" } else { "" };
+        die(&format!("cannot open pid {pid}: {e}{hint}"))
+    })
 }
 
 fn main() {
@@ -143,10 +148,11 @@ fn main() {
     match a.as_slice() {
         [] => launcher::run(),
         ["--help"] | ["-h"] => println!("{USAGE}"),
-        ["install"] => match install::menu() {
-            Ok(file) => println!("wrote {}", file.display()),
+        ["install"] => match install::all() {
+            Ok(done) => println!("{done}"),
             Err(e) => die(&e),
         },
+        ["doctor"] => doctor::run(),
         ["auto", target] => {
             let p = open(target);
             eprintln!("scanning...");
