@@ -57,6 +57,7 @@ Nếu chơi trên Windows, hoặc game dùng engine chưa có profile, Textracto
 | VenusBlood Savior, VenusBlood Valkyrie | Ninetail (Unity, Mono 32-bit) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra (Savior 2.04, Valkyrie 1.04) |
 | 封緘のグラセスタ | AGE của Eushully (SYS4) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra; chưa hiện khung lựa chọn |
 | 信天翁航海録 | Liar-soft (script `.gsc`) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra; chưa hiện khung lựa chọn |
+| 廃村少女 弐 | Escu:de | Windows, Proton-GE qua Faugus | Chính xác từng trang thoại, đã kiểm tra (kể cả ngay sau khi load save) |
 | Game engine khác | chưa có profile | bất kỳ | Chỉ có chế độ quét chung, chưa dùng được (xem [Giới hạn](#giới-hạn)) |
 
 ## Dùng
@@ -124,6 +125,9 @@ src/
     bishop/
       mod.rs         Profile engine riêng của BISHOP (BSXScript)
       text.rs        Giải mã text của BISHOP (mã \n, \A, \B, ký tự riêng)
+    escude/
+      mod.rs         Profile engine của Escu:de (廃村少女 弐)
+      text.rs        Gói ESC-ARC, nén LZW, database, script và markup của text
     liar/
       mod.rs         Profile engine của Liar-soft (信天翁航海録)
       text.rs        Gói XFL, lệnh của script GSC và markup của text
@@ -234,6 +238,16 @@ Profile age (`engines/age/`), cho engine AGE của Eushully với script `SYS4` 
 
 Định dạng file và bảng lệnh lấy từ [Kelebek1/Eushully-Decompiler](https://github.com/Kelebek1/Eushully-Decompiler).
 
+Profile escude (`engines/escude/`), cho engine của Escu:de (廃村少女 弐):
+
+1. Mọi thứ nằm trong các gói `ESC-ARC`: bảng file mã hoá bằng một khoá chạy sinh từ số gốc trong header, từng file nén LZW (`acp`). `script.bin` chứa script, `data.bin` chứa database.
+2. Mỗi script có hai file: `.bin` là mã lệnh (mỗi lệnh một byte kèm 0–2 tham số 4 byte), `.001` là các câu thoại, XOR từng byte với `0x55`. Một trang thoại là `NAME` (nếu có người nói), một hoặc nhiều `TEXT`, rồi `PAGE`. Các lệnh `OPTION` sau trang là lựa chọn; tool hiện chúng thành dòng có dấu `▶`.
+3. `NAME` mang số hiệu người nói, tra trong sheet `登場人物` của `db_scripts.bin`. Sheet `スクリプト` cho biết script số mấy là file nào.
+4. Trong text, `<r>` là xuống dòng, `<ruby text='cách đọc'>chữ</ruby>` là furigana (giữ chữ, bỏ cách đọc).
+5. Trong RAM, trình thông dịch có một bản ghi `SCR_ENV`: số hiệu script, vị trí đầu và cuối của lệnh vừa chạy, chính lệnh đó và các tham số của nó. Tool nhận ra bản ghi bằng cách đối chiếu với script: lệnh và tham số phải đúng là thứ nằm ở vị trí đó trong file, và lệnh đó phải thuộc một trang thoại. Bản ghi còn có số dòng nguồn, nhưng không dùng để đối chiếu được vì sau khi load save nó không được khôi phục. Trang đang hiện là trang chứa lệnh vừa chạy. Game giữ thêm một bản sao của bản ghi này làm trạng thái sẽ lưu vào save; ngay sau khi load hai bản giống hệt nhau, sau đó bản sao tụt lại. Vì vậy khi mọi bản ghi tìm được cùng chỉ một trang thì tool tin ngay, còn khi chúng khác nhau thì chờ xem bản nào tiến. Bản ghi này là cấu trúc đóng gói sát (không căn lề) và nằm ở địa chỉ lẻ, nên tool phải dò từng byte chứ không dò theo bước 4 byte như các engine khác.
+
+Game đóng gói luôn mã nguồn engine của nó trong `haison2.bin`; ý nghĩa các lệnh và cấu trúc `SCR_ENV` lấy từ đó. Định dạng gói, database và script lấy từ [Chenx221/EscudeTools](https://github.com/Chenx221/EscudeTools).
+
 Profile liar (`engines/liar/`), cho engine của Liar-soft (信天翁航海録):
 
 1. Script là các file `.gsc` trong gói `scr.xfl`. Gói không nén: một bảng tên file kèm vị trí và độ dài.
@@ -310,3 +324,4 @@ Engine đã nhận diện được trong `/mnt/evo860/HGAME/` (theo file đặc 
 - [Artikash/Textractor](https://github.com/Artikash/Textractor): text hooker phổ biến nhất trên Windows; so sánh ở mục [Vì sao viết tool này](#vì-sao-viết-tool-này-khi-đã-có-textractor-và-agent).
 - [Kelebek1/Eushully-Decompiler](https://github.com/Kelebek1/Eushully-Decompiler): định dạng script và gói của engine AGE.
 - [Love-in-idleness/LiarsoftTool](https://github.com/Love-in-idleness/LiarsoftTool): định dạng gói XFL và script GSC của Liar-soft.
+- [Chenx221/EscudeTools](https://github.com/Chenx221/EscudeTools): định dạng gói, database và script của Escu:de.
