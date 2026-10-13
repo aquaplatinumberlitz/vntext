@@ -21,6 +21,7 @@ Chỉ chạy trên Linux. Dùng cá nhân, chưa công bố.
 | 極限痴漢特異点 1, 2, 3, NEO và hai bản ハーレム | ArkEngine (Unity, Mono) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra; khung lựa chọn đã kiểm tra trên bản 3 |
 | 聖奴隷学園 1, 2, 3, Saimin Seishidou Secret Lesson (bản tiếng Anh) | YU-RIS (479, 488, 494) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | VenusBlood Savior, VenusBlood Valkyrie | Ninetail (Unity, Mono 32-bit) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra (Savior 2.04, Valkyrie 1.04) |
+| 封緘のグラセスタ | AGE của Eushully (SYS4) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra; chưa hiện khung lựa chọn |
 | Game engine khác | chưa có profile | bất kỳ | Chỉ có chế độ quét chung, chưa dùng được (xem [Giới hạn](#giới-hạn)) |
 
 ## Dùng
@@ -58,6 +59,9 @@ src/
     shin/
       mod.rs         Profile engine Entergram shin
       text.rs        Giải mã text của shin (bảng ký tự, lệnh @)
+    age/
+      mod.rs         Profile engine AGE của Eushully (封緘のグラセスタ)
+      text.rs        Gói ALF, lệnh của script SYS4 và text trong đó
     ark/
       mod.rs         Profile ArkEngine của Astronauts (Unity)
       text.rs        Giải mã gói script và tách khung thoại của ArkEngine
@@ -160,6 +164,16 @@ Profile yuris (`engines/yuris/`), cho các game YU-RIS (聖奴隷学園 1–3, S
 4. Engine giữ script đang nạp ở dạng đã giải mã trong RAM. Với mỗi tác vụ chạy script, nó có một khối ngữ cảnh chứa số thứ tự lệnh kế tiếp, con trỏ tới phần dữ liệu và phần số dòng của script, và số hiệu script. Số thứ tự lệnh nằm trước một dãy con trỏ dài ba ô ở phiên bản engine cũ (479) và bốn ô ở phiên bản mới (494); tool thử cả hai chỗ và lấy chỗ chứa một số hợp lệ, vì chỗ còn lại là con trỏ. Tool tìm các script đang nạp qua chữ ký `YSTB`, rồi tìm cặp ô liền nhau trỏ tới hai phần đó của cùng một script. Chỉ ngữ cảnh của script có thoại được theo dõi; các script nội bộ của engine cũng chạy thành tác vụ nhưng không có text.
 
 Định dạng file lấy từ [shimamura-sakura/yuri](https://github.com/shimamura-sakura/yuri).
+
+Profile age (`engines/age/`), cho engine AGE của Eushully với script `SYS4` (封緘のグラセスタ):
+
+1. Script là file `.BIN` đã biên dịch. Phần lớn nằm trong các gói `.ALF`, liệt kê trong `SYS4INI.BIN` (game gốc) và `APPENDnn.AAI` (các đĩa append); một số nằm lẻ trong thư mục game, là bản vá. Danh sách file trong các file chỉ mục này nén LZSS.
+2. Mỗi script là một dãy lệnh, mỗi lệnh là mã lệnh và các tham số (kiểu, giá trị). Chuỗi nằm sau phần lệnh, là Shift-JIS đảo từng bit, kết thúc bằng `FF`. Một khung thoại là các lệnh `show-text` (và `display-furigana`, chỉ giữ chữ gốc, bỏ phần phiên âm) cho tới lệnh `wait-for-input`.
+3. Tên người nói không nằm cạnh câu thoại: script gán số hiệu người nói vào một biến toàn cục rồi gọi thủ tục vẽ tên, thủ tục này tra tên trong các chuỗi toàn cục mà script khởi tạo đã đặt sẵn. Tool tự tìm thủ tục đó để biết biến nào và bảng nào, nên các số này không ghi cứng trong code. Lời dẫn gọi một thủ tục gán -1 vào biến, tức là không có tên.
+4. Các mã `F040`–`F043` là glyph riêng của engine (gạch ngang và thanh kéo dài nguyên âm), được đổi thành `―` và `ー`.
+5. Trong RAM, với mỗi script đang chạy, trình thông dịch giữ con trỏ tới đầu phần lệnh, con trỏ tới lệnh đang đứng và bản sao 12 số trong header của script (số biến cục bộ, độ dài và vị trí ba bảng sau phần lệnh). Tool tìm bản ghi này qua 12 số đó, nhận ra script nào đang chạy, và lấy khung thoại chứa lệnh đang đứng. Nếu hai script có cùng 12 số (bản gốc và bản vá), tool so phần lệnh trong RAM để chọn.
+
+Định dạng file và bảng lệnh lấy từ [Kelebek1/Eushully-Decompiler](https://github.com/Kelebek1/Eushully-Decompiler).
 
 Profile ninetail (`engines/ninetail/`), cho các game Unity của Ninetail (VenusBlood Savior, Valkyrie):
 
