@@ -55,7 +55,7 @@ Nếu chơi trên Windows, hoặc game dùng engine chưa có profile, Textracto
 | 極限痴漢特異点 1, 2, 3, NEO và hai bản ハーレム | ArkEngine (Unity, Mono) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra; khung lựa chọn đã kiểm tra trên bản 3 |
 | 聖奴隷学園 1, 2, 3, Saimin Seishidou Secret Lesson (bản tiếng Anh) | YU-RIS (479, 488, 494) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | VenusBlood Savior, VenusBlood Valkyrie | Ninetail (Unity, Mono 32-bit) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra (Savior 2.04, Valkyrie 1.04) |
-| 封緘のグラセスタ | AGE của Eushully (SYS4) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra; chưa hiện khung lựa chọn |
+| 封緘のグラセスタ | AGE của Eushully (SYS4) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, kể cả khung lựa chọn, đã kiểm tra |
 | 信天翁航海録 | Liar-soft (script `.gsc`) | Windows, Proton-GE qua Faugus | Chính xác từng câu, kể cả khung lựa chọn, đã kiểm tra |
 | 廃村少女 弐 | Escu:de | Windows, Proton-GE qua Faugus | Chính xác từng trang thoại, đã kiểm tra (kể cả ngay sau khi load save) |
 | Game engine khác | chưa có profile | bất kỳ | Chỉ có chế độ quét chung, chưa dùng được (xem [Giới hạn](#giới-hạn)) |
@@ -316,7 +316,24 @@ Quy trình khảo sát một game mới, theo kinh nghiệm từ shin:
 3. Xác định kịch bản nằm trong RAM hay phải giải nén từ file game.
 4. Tìm cách biết câu đang hiển thị. Với shin là ô vị trí của máy ảo. Một cách chung hơn, chưa thử: dùng các mảnh text mà quét chung bắt được để tra ngược vào kịch bản đầy đủ.
 
-Engine đã nhận diện được trong `/mnt/evo860/HGAME/` (theo file đặc trưng): CatSystem2 (loạt Grisaia, `*.int`), YU-RIS (`pac/*.ypf`), Unity (`UnityPlayer.dll`). Các thư mục còn lại chưa xác định.
+### Engine phổ biến chưa làm
+
+Thư viện `/mnt/evo860/HGAME/` hiện không có game nào thuộc các engine dưới đây (trừ loạt Grisaia, bỏ qua vì đã có tiếng Anh), nên chưa viết profile: không có game thật để đo thì dễ sai. Ghi lại để khi tải về một game mà tool không nhận thì biết nó thuộc họ nào và bắt đầu từ đâu.
+
+Cách nhận ra: tìm file đặc trưng trong thư mục game. Game ví dụ lấy từ [bảng định dạng của GARbro](https://morkt.github.io/GARbro/supported.html); những tên sau chữ "nhớ là" chưa được kiểm chứng, phải xem file trước khi tin.
+
+| Engine | File đặc trưng | Game ví dụ | Bắt đầu từ |
+|---|---|---|---|
+| KiriKiri 2 / KiriKiri Z | `*.xp3`, `data.xp3` | Fate/stay night, G-senjou no Maou, 11eyes, Amairo＊Islenauts, Hello Lady!, Clover Day's. Nhớ là: các game Yuzusoft sau này, nhiều game Lilith | [krkrz/krkrz](https://github.com/krkrz/krkrz) (mã nguồn engine), [xmoezzz/KrkrExtract](https://github.com/xmoezzz/KrkrExtract), `ArcFormats/KiriKiri` của GARbro. Gói thường mã hoá riêng theo từng game; script là `.ks` (text) hoặc `.scn` (PSB nhị phân) |
+| SiglusEngine (VisualArt's) | `Scene.pck`, `Gameexe.dat`, `SiglusEngine.exe` | Nhớ là: Rewrite, Angel Beats!, game của SAGA PLANETS và Tone Work's | [xmoezzz/SiglusExtract](https://github.com/xmoezzz/SiglusExtract). `Scene.pck` nén và XOR bằng khoá riêng của game |
+| CatSystem2 | `*.int`, `cs2.exe` | Grisaia no Kajitsu/Meikyuu, Happiness! Re:Lucks, Shukufuku no Campanella, Kamikaze☆Explorer!, Sakigake⇒Generation!. Amakano và Amakano 2+ (theo yêu cầu hỗ trợ gửi GARbro: `.int`, gói mã hoá bằng khoá riêng). Nhớ là: Maitetsu | [trigger-segfault/TriggersTools.CatSystem2](https://github.com/trigger-segfault/TriggersTools.CatSystem2) (có wiki về định dạng). Script là `.cst` trong `scene.int` |
+| Artemis | `*.pfs`, `root.pfs` | Boku no Elf Onee-san, Tsugou no Ii Kanojo, Memory's Dogma. Nhớ là: Hamidashi Creative, Aonatsu Line, 9-nine- | `ArcFormats/Artemis` của GARbro. Script là text (`.ast`, Lua), nên phần giải mã nhẹ |
+
+Vài lưu ý:
+
+- Trước khi coi một game là "engine mới", thử chạy tool đã: nhiều hãng dùng chung engine đã có profile. YU-RIS chẳng hạn có cả euphoria, Aikagi, Koi Mekuri Clover, M.C. Saimin Kenkyuu trong bảng của GARbro.
+- Textractor có mã hook sẵn cho các engine trong bảng, nên trong lúc chưa có profile vẫn chơi được bằng Textractor chạy trong cùng prefix Wine.
+- Xếp theo số game thì KiriKiri đứng đầu, rồi tới Siglus, Artemis, CatSystem2.
 
 ## Nguồn tham khảo
 
