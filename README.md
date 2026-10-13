@@ -20,6 +20,7 @@ Chỉ chạy trên Linux. Dùng cá nhân, chưa công bố.
 | 催眠術3, 催眠術4, 催眠術 RE, WIZARDLINKS | MED | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra |
 | 極限痴漢特異点 1, 2, 3, NEO và hai bản ハーレム | ArkEngine (Unity, Mono) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra; khung lựa chọn đã kiểm tra trên bản 3 |
 | 聖奴隷学園 1, 2, 3, Saimin Seishidou Secret Lesson (bản tiếng Anh) | YU-RIS (479, 488, 494) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
+| VenusBlood Savior, VenusBlood Valkyrie | Ninetail (Unity, Mono 32-bit) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra (Savior 2.04, Valkyrie 1.04) |
 | Game engine khác | chưa có profile | bất kỳ | Chỉ có chế độ quét chung, chưa dùng được (xem [Giới hạn](#giới-hạn)) |
 
 ## Dùng
@@ -66,6 +67,9 @@ src/
     med/
       mod.rs         Profile engine MED (催眠術3, 4, RE, WIZARDLINKS)
       text.rs        Dò khoá, giải mã script và text của MED
+    ninetail/
+      mod.rs         Profile engine Unity của Ninetail (VenusBlood)
+      text.rs        Bundle UnityFS, cảnh JSON và bảng tên nhân vật
     spt/
       mod.rs         Profile engine cũ của BLACKRAINBOW (script .spt)
       text.rs        Giải mã text của spt
@@ -156,6 +160,15 @@ Profile yuris (`engines/yuris/`), cho các game YU-RIS (聖奴隷学園 1–3, S
 4. Engine giữ script đang nạp ở dạng đã giải mã trong RAM. Với mỗi tác vụ chạy script, nó có một khối ngữ cảnh chứa số thứ tự lệnh kế tiếp, con trỏ tới phần dữ liệu và phần số dòng của script, và số hiệu script. Số thứ tự lệnh nằm trước một dãy con trỏ dài ba ô ở phiên bản engine cũ (479) và bốn ô ở phiên bản mới (494); tool thử cả hai chỗ và lấy chỗ chứa một số hợp lệ, vì chỗ còn lại là con trỏ. Tool tìm các script đang nạp qua chữ ký `YSTB`, rồi tìm cặp ô liền nhau trỏ tới hai phần đó của cùng một script. Chỉ ngữ cảnh của script có thoại được theo dõi; các script nội bộ của engine cũng chạy thành tác vụ nhưng không có text.
 
 Định dạng file lấy từ [shimamura-sakura/yuri](https://github.com/shimamura-sakura/yuri).
+
+Profile ninetail (`engines/ninetail/`), cho các game Unity của Ninetail (VenusBlood Savior, Valkyrie):
+
+1. Mỗi cảnh là một bundle `UnityFS` riêng trong `Standalone/scenario`, khối dữ liệu nén LZMA. Trong bundle có một text asset là JSON bắt đầu bằng `{"fileName":`; tool tìm nó theo nội dung thay vì đọc bảng đối tượng của Unity, nên không phụ thuộc phiên bản Unity.
+2. Cảnh là một danh sách cut. Cut có thoại khi `window_enable` bật và `window.texts[0]` có chữ; dấu `;` trong text là xuống dòng. Tên người nói là `window.name`, nếu trống thì tra `window.tag` trong phần `@char` của bảng `advdb_dataset_jp` (text asset trong `resources.assets`). Cut có lựa chọn liệt kê chúng trong `select`; tool hiện mỗi lựa chọn thành một dòng có dấu `▶` sau câu thoại.
+3. Trong RAM, đối tượng `AdvDataControlUser` giữ tên cảnh đang chạy (`filename`), số thứ tự cut đang hiện (`indexNum`) và số cut của cảnh (`indexMax`). Tool tìm nó bằng một ô trỏ tới chuỗi là tên một cảnh, theo sau là hai chuỗi nữa và, cách vài ô, một số nhỏ hơn số cut của cảnh đó đứng ngay trước chính số cut đó.
+4. Khi nạp save, game tạo đối tượng mới và đối tượng cũ còn nằm lại trong RAM. Nếu chỉ tìm thấy một đối tượng thì tool tin ngay; nếu có nhiều thì tool chờ xem cái nào tiến theo người đọc.
+
+Toàn bộ thông tin lấy từ chính mã của game, dịch ngược từ `Assembly-CSharp.dll` bằng ILSpy.
 
 **Quét chung** (`text.rs`, hàm `auto` trong `main.rs`) — đường dự phòng:
 
