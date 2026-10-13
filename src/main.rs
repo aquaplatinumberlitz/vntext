@@ -8,7 +8,7 @@ mod translate;
 mod web;
 mod yomitan;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::io::Write;
 use std::process::{exit, Command};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
@@ -24,18 +24,21 @@ const USAGE: &str = "\
 vntext - read Japanese text out of a running game or emulator
 
 usage:
-  vntext auto    <pid|name> [--min N] [--all] [--clip]   print new lines as they appear
+  vntext auto    <pid|name> [--clip]                     follow a game whose engine has a profile
+  vntext ocr     <pid|name> [--pick] [--clip]            read the text box of any game from pictures of it
+                                                         (needs a Gemini API key)
+
+for looking into a game that has no profile yet:
   vntext strings <pid|name> [--min N] [--all]            dump every Japanese string in memory
   vntext find    <pid|name> <text> [--all]               locate a known string
   vntext watch   <pid|name> <hex addr> <utf8|utf16|sjis> [--clip]
-  vntext ocr     <pid|name> [--pick] [--clip]             read the text box from pictures of it (needs GEMINI_API_KEY)
 
   --min N   minimum characters per string (default 4)
   --all     also scan read-only memory
   --clip    copy each line to the clipboard (wl-copy)
   --pick    ocr: point out the text box again (asked the first time a game is read)
 
-auto, when it recognises the game's engine, and ocr also take:
+auto and ocr also take:
   --raw          print text as the engine stores it, control codes included
   --debug        log every change of the cells that hold a reading position
   --web          serve a live page for reading with Yomitan (http://127.0.0.1:8777)
@@ -55,15 +58,6 @@ auto, when it recognises the game's engine, and ocr also take:
 const STABLE: Duration = Duration::from_millis(250);
 const TICK: Duration = Duration::from_millis(50);
 const READ_LEN: usize = 4096;
-/// A batch of settled candidates is printed once nothing has changed for this long...
-const QUIET: Duration = Duration::from_millis(300);
-/// ...or after this long regardless, so constant background churn cannot block output.
-const MAX_HOLD: Duration = Duration::from_millis(1500);
-/// Complete lines an address must have held before it is polled directly.
-const HOT_AFTER: u32 = 2;
-const MAX_HOT: usize = 8;
-/// A hot address that keeps yielding fragments of other lines is dropped.
-const MAX_STRIKES: u32 = 3;
 /// Printed lines remembered for duplicate / fragment suppression.
 const HISTORY: usize = 30;
 
@@ -149,7 +143,7 @@ fn main() {
                 Some(engine) => follow(p, engine.into(), &o),
                 // without a profile the overlay offers to read pictures of the text box
                 None if o.overlay => ocr::run(p.pid, &o, false),
-                None => auto(p, cfg, &o),
+                None => die(&format!("no profile knows this game's engine. Its text box can be read from pictures instead:\n  vntext ocr {target} --translate --overlay")),
             }
         }
         ["ocr", target] => ocr::run(mem::resolve(target).unwrap_or_else(|e| die(&e)), &o, true),
@@ -253,12 +247,11 @@ struct Track {
     text: String,
     since: Instant,
     printed: String,
-    strikes: u32,
 }
 
 fn watch(p: Proc, addr: u64, enc: Enc, o: &Opts) {
     let mut out = Printer { clip: o.clip, recent: VecDeque::new() };
-    let mut t = Track { addr, enc, text: String::new(), since: Instant::now(), printed: String::new(), strikes: 0 };
+    let mut t = Track { addr, enc, text: String::new(), since: Instant::now(), printed: String::new() };
     let mut buf = vec![0u8; READ_LEN];
     loop {
         if !poll(&p, &mut t, &mut buf) {
@@ -565,142 +558,4 @@ fn translator_worker(t: translate::Translator, o_to: String, engine: Arc<dyn Eng
             fetching.store(false, Ordering::SeqCst);
         });
     }
-}
-
-/// Calibration-free mode. A background thread rescans the whole process; any
-/// address whose content changed since the previous scan becomes a candidate
-/// and is polled until its text stops changing (typewriter effects). Settled
-/// candidates are collected into a batch, and once things go quiet only the
-/// longest strings of the batch are printed, which drops partial copies.
-/// Addresses that repeatedly held a complete line are then polled directly.
-fn auto(p: Proc, cfg: Cfg, o: &Opts) {
-    let (tx, rx) = mpsc::channel();
-    let (pid, all) = (p.pid, o.all);
-    thread::spawn(move || {
-        let Ok(p) = Proc::open(pid) else { return };
-        loop {
-            let t = Instant::now();
-            let Ok((hits, stats)) = full_scan(&p, &cfg, all) else { return };
-            if tx.send((hits, stats, t.elapsed())).is_err() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-    });
-
-    let mut out = Printer { clip: o.clip, recent: VecDeque::new() };
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut last: HashMap<(u64, Enc), u64> = HashMap::new();
-    let mut baseline = true;
-    let mut pending: Vec<Track> = Vec::new();
-    let mut batch: Vec<Track> = Vec::new();
-    let mut hot: Vec<Track> = Vec::new();
-    let mut score: HashMap<(u64, Enc), u32> = HashMap::new();
-    let mut activity = Instant::now();
-    let mut batch_since = Instant::now();
-    let mut buf = vec![0u8; READ_LEN];
-
-    loop {
-        match rx.recv_timeout(TICK) {
-            Ok((hits, stats, took)) => {
-                let mut cur = HashMap::with_capacity(hits.len());
-                let total = hits.len();
-                for h in hits {
-                    let key = (h.addr, h.enc);
-                    let hash = hash_of(&h.text);
-                    cur.insert(key, hash);
-                    if baseline {
-                        seen.insert(h.text);
-                        continue;
-                    }
-                    let tracked = |t: &Track| (t.addr, t.enc) == key;
-                    if last.get(&key) != Some(&hash) && !pending.iter().chain(&batch).chain(&hot).any(tracked) {
-                        pending.push(Track { addr: h.addr, enc: h.enc, text: h.text, since: Instant::now(), printed: String::new(), strikes: 0 });
-                        activity = Instant::now();
-                    }
-                }
-                last = cur;
-                if baseline {
-                    eprintln!(
-                        "baseline: {total} strings in {} MB ({:.2}s per scan). Advance the text in game.",
-                        stats.bytes >> 20,
-                        took.as_secs_f32()
-                    );
-                    baseline = false;
-                }
-            }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => die("target process is gone"),
-        }
-
-        let mut i = 0;
-        while i < hot.len() {
-            let t = &mut hot[i];
-            poll(&p, t, &mut buf);
-            if t.text != t.printed && !t.text.is_empty() && t.since.elapsed() >= STABLE {
-                t.printed = t.text.clone();
-                if out.fragment(&t.text) {
-                    t.strikes += 1;
-                } else {
-                    seen.insert(t.text.clone());
-                    out.emit(&t.text, t.addr, t.enc, " hot");
-                }
-            }
-            if hot[i].strikes >= MAX_STRIKES {
-                hot.swap_remove(i);
-            } else {
-                i += 1;
-            }
-        }
-
-        let mut i = 0;
-        while i < pending.len() {
-            let t = &mut pending[i];
-            let before = t.since;
-            poll(&p, t, &mut buf);
-            if t.since != before {
-                activity = t.since;
-            }
-            if t.text.is_empty() || !text::is_japanese(&t.text, t.enc, &cfg) {
-                pending.swap_remove(i);
-            } else if t.since.elapsed() >= STABLE {
-                if batch.is_empty() {
-                    batch_since = Instant::now();
-                }
-                batch.push(pending.swap_remove(i));
-            } else {
-                i += 1;
-            }
-        }
-
-        let quiet = pending.is_empty() && activity.elapsed() >= QUIET;
-        if !batch.is_empty() && (quiet || batch_since.elapsed() >= MAX_HOLD) {
-            batch.sort_by(|a, b| b.text.len().cmp(&a.text.len()));
-            let mut winners: Vec<String> = Vec::new();
-            for mut t in batch.drain(..) {
-                if winners.iter().any(|w| w.len() > t.text.len() && w.contains(&t.text)) || out.fragment(&t.text) {
-                    continue;
-                }
-                if !winners.contains(&t.text) {
-                    winners.push(t.text.clone());
-                    if seen.insert(t.text.clone()) {
-                        out.emit(&t.text, t.addr, t.enc, "");
-                    }
-                }
-                let n = score.entry((t.addr, t.enc)).or_insert(0);
-                *n += 1;
-                if *n >= HOT_AFTER && hot.len() < MAX_HOT {
-                    t.printed = t.text.clone();
-                    hot.push(t);
-                }
-            }
-        }
-    }
-}
-
-fn hash_of(text: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut h);
-    h.finish()
 }

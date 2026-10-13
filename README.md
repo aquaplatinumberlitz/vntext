@@ -33,12 +33,12 @@ Lý do cụ thể dẫn tới dự án:
 
 Cái giá phải trả:
 
-- **Ít game hơn nhiều.** Textractor chạy được trên rất nhiều game mà không ai phải làm gì thêm. vntext chỉ chạy trên engine đã có profile; chế độ quét chung dành cho game lạ chưa dùng được (xem [Giới hạn](#giới-hạn)).
+- **Ít game hơn nhiều.** Textractor chạy được trên rất nhiều game mà không ai phải làm gì thêm. vntext chỉ lấy được text chính xác trên engine đã có profile; game lạ thì đọc bằng ảnh chụp khung thoại (lệnh `ocr`), chạy với mọi game nhưng có thể sai chữ và không dịch trước được.
 - **Mỗi engine là một lần dịch ngược.** Phải biết định dạng gói, định dạng script và chỗ engine giữ vị trí đọc. Nếu đã có người nghiên cứu định dạng thì nhanh; nếu chưa thì viết H-code cho Textractor thường nhanh hơn viết profile.
 - **Text động thì không thấy.** Thứ game ghép lúc chạy (tên do người chơi đặt, số liệu trong câu, giao diện chiến đấu) không nằm trong script nên tool không có, còn hook thì bắt được.
 - **Chỉ Linux.**
 
-Nếu chơi trên Windows, hoặc game dùng engine chưa có profile, Textractor vẫn là lựa chọn hợp lý hơn. vntext dành cho trường hợp chơi trên Linux và muốn text chính xác từng đoạn để đọc cùng bản dịch.
+Nếu chơi trên Windows, Textractor vẫn là lựa chọn hợp lý hơn; với game chưa có profile thì cân nhắc giữa Textractor và lệnh `ocr`. vntext dành cho trường hợp chơi trên Linux và muốn text chính xác từng đoạn để đọc cùng bản dịch.
 
 ## Tình trạng
 
@@ -58,7 +58,7 @@ Nếu chơi trên Windows, hoặc game dùng engine chưa có profile, Textracto
 | 封緘のグラセスタ | AGE của Eushully (SYS4) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, kể cả khung lựa chọn, đã kiểm tra |
 | 信天翁航海録 | Liar-soft (script `.gsc`) | Windows, Proton-GE qua Faugus | Chính xác từng câu, kể cả khung lựa chọn, đã kiểm tra |
 | 廃村少女 弐 | Escu:de | Windows, Proton-GE qua Faugus | Chính xác từng trang thoại, đã kiểm tra (kể cả ngay sau khi load save) |
-| Game engine khác | chưa có profile | bất kỳ | Chỉ có chế độ quét chung, chưa dùng được (xem [Giới hạn](#giới-hạn)) |
+| Game engine khác | chưa có profile | cửa sổ X11 | Đọc khung thoại bằng ảnh chụp (lệnh `ocr` hoặc nút OCR trên dải nổi); đã kiểm tra |
 
 ## Dùng
 
@@ -80,7 +80,7 @@ Game chưa có profile thì đọc bằng ảnh chụp khung thoại:
 ```
 
 - Lần đầu với mỗi game, tool hỏi khung thoại ở đâu. Có `--overlay` thì màn hình tối lại và kéo chuột quanh khung thoại; không có thì đưa chuột tới góc trên trái của khung rồi nhấn Enter trong terminal, rồi tới góc dưới phải. Vùng này lưu theo tên process trong `~/.config/vntext/regions.tsv`; thêm `--pick` (hoặc nút khoanh vùng trên cụm nút) để khoanh lại.
-- `auto --overlay` với game không nhận ra engine không rơi về quét chung mà hiện cụm nút kèm lời nhắc bấm OCR.
+- `auto` với game không nhận ra engine thì báo dùng `ocr`; có `--overlay` thì hiện cụm nút kèm lời nhắc bấm OCR.
 - Mỗi khi khung thoại đổi và đứng yên, ảnh vùng đó (PNG xám 16 mức, vài KB) được gửi lên Gemini, một lần gọi trả về người nói, câu tiếng Nhật và bản dịch. Luôn cần key Gemini, kể cả khi không dịch và kể cả khi nguồn dịch đã chọn là nguồn khác.
 - `--debug` lưu ảnh vừa gửi vào `~/.cache/vntext/ocr.png` và in thời gian trả lời.
 - Game vẽ bằng GPU và Ryujinx chưa thử.
@@ -116,7 +116,7 @@ Các lệnh khác:
 
 | Lệnh | Tác dụng |
 |---|---|
-| `auto <pid\|tên>` | Theo dõi và in đoạn thoại mới. Tự nhận engine; không nhận ra thì quét chung |
+| `auto <pid\|tên>` | Theo dõi và in đoạn thoại mới của game có profile; tự nhận engine |
 | `ocr <pid\|tên>` | Đọc khung thoại từ ảnh chụp qua Gemini, cho game chưa có profile |
 | `strings <pid\|tên>` | In mọi chuỗi tiếng Nhật đang có trong bộ nhớ. Dùng để khảo sát game mới |
 | `find <pid\|tên> <chuỗi>` | Tìm địa chỉ một chuỗi đã biết, ở cả ba bảng mã |
@@ -152,7 +152,7 @@ Lưu ý khi tìm game theo tên: Linux chỉ giữ 15 byte đầu của tên pro
 src/
   main.rs            Dòng lệnh và các vòng lặp chính
   mem.rs             Đọc bộ nhớ process khác
-  text.rs            Tìm chuỗi tiếng Nhật trong dữ liệu thô
+  text.rs            Tìm chuỗi tiếng Nhật trong dữ liệu thô (cho các lệnh khảo sát)
   engines/
     mod.rs           Giao diện chung của mọi profile, danh sách engine
     shin/
@@ -185,7 +185,11 @@ src/
     yuris/
       mod.rs         Profile engine YU-RIS
       text.rs        Gói YPF, script YSTB và cách dò khoá của YU-RIS
-  translate.rs       Dịch qua Gemini API, có cache
+  translate.rs       Các nguồn dịch (Gemini, OpenAI, DeepSeek, Claude, server local, Google), có cache
+  ocr.rs             Đọc khung thoại từ ảnh chụp qua Gemini
+  screen.rs          Tìm và chụp cửa sổ game qua X11, nén ảnh
+  overlay.rs         Dải nổi và cụm nút cạnh cửa sổ game (GTK4, layer-shell)
+  yomitan.rs         Tra từ qua API của Yomitan
   web.rs             Máy chủ trang web, đẩy sự kiện tới trình duyệt
   page.html          Trang hiển thị cho Yomitan
 ```
@@ -202,9 +206,7 @@ Tool gồm ba tầng. Chỉ tầng giữa phụ thuộc engine.
 
 ### Tầng 2: tìm ra câu đang hiển thị
 
-Có hai đường, `auto` tự chọn.
-
-**Profile engine** (`engines/`) — đường chính xác. Profile shin:
+Mỗi họ engine có một profile (`engines/`) biết script của game nằm ở đâu và engine giữ vị trí đang đọc ở ô nhớ nào. `auto` thử lần lượt các profile và dùng cái nhận ra game. Profile shin:
 
 1. Tìm file kịch bản trong RAM qua chữ ký `SNR `, đọc cả file.
 2. Tách mọi lệnh thoại `MSGSET` (opcode `0x86`), kiểm tra bằng việc số thứ tự thoại phải liên tiếp. Bố cục lệnh lệch nhau giữa các game: bảng `LAYOUTS` liệt kê các kiểu đã biết (Umineko 7 byte đầu, Higurashi 8), tool thử hết và giữ kiểu đọc ra nhiều đoạn hơn.
@@ -314,24 +316,19 @@ Profile ninetail (`engines/ninetail/`), cho các game Unity của Ninetail (Venu
 
 Toàn bộ thông tin lấy từ chính mã của game, dịch ngược từ `Assembly-CSharp.dll` bằng ILSpy.
 
-**Quét chung** (`text.rs`, hàm `auto` trong `main.rs`) — đường dự phòng:
-
-- Tìm chuỗi tiếng Nhật ở UTF-8, UTF-16LE và Shift-JIS, lọc dữ liệu nhị phân trông giống chữ (phải có kana liền nhau, kanji thuộc bảng Shift-JIS, không lặp vài ký tự, ...).
-- Quét lặp lại toàn bộ process, coi địa chỉ nào đổi nội dung là ứng viên, chờ nội dung ổn định rồi in chuỗi dài nhất của mỗi đợt.
+Game không có profile đi đường khác hẳn, không đọc bộ nhớ: ảnh chụp khung thoại được gửi cho Gemini đọc (`ocr.rs`, `screen.rs`). Tool từng có một chế độ quét chung, tìm chuỗi tiếng Nhật đổi nội dung trong toàn bộ process; nó chỉ bắt được mảnh của bộ nhớ đã giải phóng nên đã bị gỡ. Phần tìm chuỗi (`text.rs`) còn lại cho các lệnh khảo sát `strings`, `find`, `watch`.
 
 ### Tầng 3: đưa text ra (`translate.rs`, `web.rs`, `page.html`)
 
-- **Dịch**: mỗi đoạn thoại được dịch nguyên khối, kèm 4 đoạn trước làm ngữ cảnh. Một lần gọi API dịch luôn 8 đoạn kế tiếp để khi đọc tới đã có sẵn. Kết quả lưu ở `~/.cache/vntext/<ngôn ngữ>.tsv`.
+- **Dịch**: mỗi đoạn thoại được dịch nguyên khối, kèm 8 đoạn trước làm ngữ cảnh. Một lần gọi API dịch luôn 12 đoạn kế tiếp để khi đọc tới đã có sẵn. Kết quả lưu ở `~/.cache/vntext/<ngôn ngữ>.tsv`.
 - **Trang web**: máy chủ HTTP tối giản trên `127.0.0.1`, đẩy sự kiện bằng server-sent events, giữ 200 sự kiện gần nhất cho trình duyệt kết nối sau.
-
-Dịch và trang web hiện chỉ nối với đường profile engine; chế độ quét chung chỉ in ra terminal và clipboard.
 
 ## Giới hạn
 
-- **Quét chung chưa dùng được.** Trên Umineko nó chỉ bắt được mảnh của bộ nhớ đã giải phóng: lúc đủ, lúc cụt đầu, lúc mất hẳn. Mỗi lượt quét mất 3–6 giây.
+- **Game chưa có profile chỉ đọc được bằng ảnh.** OCR có thể sai chữ, không tách được text động, không dịch trước, và mỗi câu tốn một lần gọi Gemini.
 - **Chưa bám theo từng lần bấm.** Một đoạn thoại gồm vài câu mà game hiện dần; tool in cả đoạn ngay khi game tới đó.
 - **Tua nhanh có thể sót đoạn**, vì ô vị trí chỉ được đọc mỗi 50 ms.
-- **Lựa chọn, menu, TIPS** chưa được kiểm tra.
+- **Khung lựa chọn** đã có ở mọi profile trừ shin (Umineko, Higurashi); TIPS chưa được kiểm tra.
 - **Cần quyền đọc process**: cùng user và `kernel.yama.ptrace_scope = 0`.
 
 ## Thêm engine mới
@@ -356,7 +353,7 @@ Quy trình khảo sát một game mới, theo kinh nghiệm từ shin:
 1. **Tra nghiên cứu có sẵn trước.** GARbro (định dạng archive và script), Textractor và LunaTranslator (text nằm ở đâu, bảng mã gì), các tool dịch của cộng đồng, bản viết lại engine nếu có. Với shin, tự mò mất một vòng sai mà repo có sẵn đáp án.
 2. Chạy `strings` lúc game đang hiện thoại để biết bảng mã và mã điều khiển; dùng `find` với một cụm trên màn hình để tìm bản gốc.
 3. Xác định kịch bản nằm trong RAM hay phải giải nén từ file game.
-4. Tìm cách biết câu đang hiển thị. Với shin là ô vị trí của máy ảo. Một cách chung hơn, chưa thử: dùng các mảnh text mà quét chung bắt được để tra ngược vào kịch bản đầy đủ.
+4. Tìm cách biết câu đang hiển thị. Với shin là ô vị trí của máy ảo. Các engine sau đều theo cùng mô hình đó: script cộng một ô vị trí.
 
 ### Engine phổ biến chưa làm
 
@@ -374,7 +371,8 @@ Cách nhận ra: tìm file đặc trưng trong thư mục game. Game ví dụ l�
 Vài lưu ý:
 
 - Trước khi coi một game là "engine mới", thử chạy tool đã: nhiều hãng dùng chung engine đã có profile. YU-RIS chẳng hạn có cả euphoria, Aikagi, Koi Mekuri Clover, M.C. Saimin Kenkyuu trong bảng của GARbro.
-- Textractor có mã hook sẵn cho các engine trong bảng, nên trong lúc chưa có profile vẫn chơi được bằng Textractor chạy trong cùng prefix Wine.
+- Profile engine vẫn là đường chính của tool: chỉ nó cho text đúng từng chữ, có tên người nói và dịch trước được. Gặp game thuộc bảng này mà định chơi nghiêm túc thì viết profile cho nó.
+- Trong lúc chưa có profile vẫn chơi được bằng lệnh `ocr` (hoặc nút OCR trên dải nổi), hay bằng Textractor chạy trong cùng prefix Wine, vốn có mã hook sẵn cho các engine trong bảng.
 - Xếp theo số game thì KiriKiri đứng đầu, rồi tới Siglus, Artemis, CatSystem2.
 
 ## Nguồn tham khảo
