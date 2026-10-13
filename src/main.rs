@@ -6,6 +6,7 @@ mod screen;
 mod text;
 mod translate;
 mod web;
+mod yomitan;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
@@ -42,7 +43,13 @@ auto, when it recognises the game's engine, and ocr also take:
   --overlay      show each message, translated if --translate is given, in a strip by the game's window
   --translate    translate each message with the Gemini API (needs GEMINI_API_KEY)
   --to LANG      target language (default vi)
-  --model ID     Gemini model (default: newest Flash-Lite the API offers)";
+  --via NAME     who translates: gemini, openai, deepseek, claude, local (a server that speaks like
+                 OpenAI's) or google; default: the one chosen on the overlay, or gemini. Keys come from
+                 the overlay's settings or from GEMINI_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY,
+                 ANTHROPIC_API_KEY
+  --model ID     model to translate with (default: the one set up; for gemini the newest Flash-Lite)
+  --google       the same as --via google: Google Translate, which needs no key. It also steps in
+                 when a key is missing and for a passage the chosen service fails on";
 
 /// A string must stay unchanged this long before it is printed (typewriter effects).
 const STABLE: Duration = Duration::from_millis(250);
@@ -74,6 +81,7 @@ struct Opts {
     debug: bool,
     pick: bool,
     overlay: bool,
+    via: Option<translate::Service>,
 }
 
 fn parse_args() -> Opts {
@@ -91,6 +99,7 @@ fn parse_args() -> Opts {
         debug: false,
         pick: false,
         overlay: false,
+        via: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -103,6 +112,11 @@ fn parse_args() -> Opts {
             "--debug" => o.debug = true,
             "--pick" => o.pick = true,
             "--overlay" => o.overlay = true,
+            "--google" => o.via = Some(translate::Service::Google),
+            "--via" => {
+                let named = it.next().and_then(|v| translate::Service::named(&v));
+                o.via = Some(named.unwrap_or_else(|| die("--via needs one of: gemini, openai, deepseek, claude, local, google")));
+            }
             "--to" => o.to = it.next().unwrap_or_else(|| die("--to needs a language")),
             "--model" => o.model = Some(it.next().unwrap_or_else(|| die("--model needs a model id"))),
             "--port" => o.port = it.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| die("--port needs a number")),
@@ -133,10 +147,12 @@ fn main() {
             eprintln!("scanning...");
             match engines::detect(&p) {
                 Some(engine) => follow(p, engine.into(), &o),
+                // without a profile the overlay offers to read pictures of the text box
+                None if o.overlay => ocr::run(p.pid, &o, false),
                 None => auto(p, cfg, &o),
             }
         }
-        ["ocr", target] => ocr::run(mem::resolve(target).unwrap_or_else(|e| die(&e)), &o),
+        ["ocr", target] => ocr::run(mem::resolve(target).unwrap_or_else(|e| die(&e)), &o, true),
         ["strings", target] => strings(open(target), cfg, &o),
         ["find", target, needle] => find(open(target), needle, &o),
         ["watch", target, addr, enc] => {
@@ -301,15 +317,28 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
             Err(e) => die(&format!("cannot serve on port {}: {e}", o.port)),
         }
     }
+    // while the reader has the text box read from pictures, the profile keeps quiet
+    let pictures = Arc::new(ocr::Control::default());
     if o.overlay {
-        overlay::start(hub.subscribe(), p.pid);
+        overlay::start(hub.clone(), p.pid, pictures.clone(), ocr::Settings::of(o), false);
     }
-    let jobs = o.translate.then(|| {
-        let translator = translate::Translator::new(&o.to, o.model.clone()).unwrap_or_else(|e| die(&e));
+    let translator = o.translate.then(|| translate::Translator::new(&o.to, o.model.clone(), o.via)).and_then(|made| match made {
+        Ok(translator) => Some(translator),
+        // a key can be entered on the overlay, for the next run
+        Err(e) if o.overlay => {
+            hub.publish(serde_json::json!({"type": "notice", "text": format!("Chưa dịch được: {e}. Nhập key bằng nút chìa khoá rồi chạy lại.")}).to_string());
+            eprintln!("\x1b[33mnot translating: {e}\x1b[0m");
+            None
+        }
+        Err(e) => die(&e),
+    });
+    let jobs = translator.map(|translator| {
         eprintln!("translating with {}", translator.client.model);
+        translate::set_at_work(translator.client.service);
         let (tx, rx) = mpsc::channel();
         let (engine, hub) = (engine.clone(), hub.clone());
-        thread::spawn(move || translator_worker(translator, engine, hub, rx));
+        let to = o.to.clone();
+        thread::spawn(move || translator_worker(translator, to, engine, hub, rx));
         tx
     });
 
@@ -335,7 +364,6 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
     let mut retry = RELOCATE_FIRST;
     let mut changed = Instant::now();
     let mut last = None;
-    let mut seq = 0u64;
     loop {
         if !std::path::Path::new(&format!("/proc/{}", p.pid)).exists() {
             die("target process is gone");
@@ -364,17 +392,18 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
                 next = Some(index);
             }
         }
-        if let Some(index) = next.filter(|i| last != Some(*i)) {
+        if let Some(index) = next.filter(|i| last != Some(*i) && !pictures.on()) {
             last = Some(index);
             changed = Instant::now();
             retry = RELOCATE_FIRST;
-            seq += 1;
+            let seq = hub.next_seq();
             let passage = engine.passage(index);
             eprintln!("\x1b[2m[#{index}]\x1b[0m");
             if o.raw {
                 println!("{}", passage.raw);
             } else {
-                passage.speaker.iter().chain(&passage.lines).for_each(|l| println!("{l}"));
+                passage.speaker.iter().for_each(|name| println!("\x1b[1;33m{name}\x1b[0m"));
+                passage.lines.iter().for_each(|l| println!("{l}"));
             }
             let _ = std::io::stdout().flush();
             if o.clip {
@@ -382,7 +411,7 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
             }
             hub.publish(
                 serde_json::json!({
-                    "type": "message", "seq": seq, "index": index,
+                    "type": "message", "seq": seq, "source": "profile", "index": index,
                     "name": passage.speaker, "lines": passage.lines, "translating": jobs.is_some(),
                 })
                 .to_string(),
@@ -438,7 +467,7 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
 /// Requests run on their own thread and reach ahead of the reader: a new one
 /// is started while half of the lookahead is still cached, so that a
 /// translation is normally there by the time its passage is shown.
-fn translator_worker(t: translate::Translator, engine: Arc<dyn Engine>, hub: web::Hub, jobs: Receiver<(u64, usize)>) {
+fn translator_worker(t: translate::Translator, o_to: String, engine: Arc<dyn Engine>, hub: web::Hub, jobs: Receiver<(u64, usize)>) {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
 
@@ -446,7 +475,8 @@ fn translator_worker(t: translate::Translator, engine: Arc<dyn Engine>, hub: web
         let passage = engine.passage(index);
         translate::Line { speaker: passage.speaker, text: passage.lines.join("\n") }
     };
-    let client = t.client.clone();
+    let mut client = t.client.clone();
+    let mut setups = translate::saves();
     let t = Arc::new(Mutex::new(t));
     let fetching = Arc::new(AtomicBool::new(false));
     // shown passages still waiting for their translation
@@ -454,6 +484,18 @@ fn translator_worker(t: translate::Translator, engine: Arc<dyn Engine>, hub: web
     let mut newest = 0;
     let mut latest = None;
     loop {
+        // the reader has set translation up anew on the overlay: go by that from here on
+        if setups != translate::saves() {
+            setups = translate::saves();
+            match translate::Client::new(&o_to, None, None) {
+                Ok(new) => {
+                    eprintln!("translating with {} ({})", new.model, new.service.known().label);
+                    translate::set_at_work(new.service);
+                    client = new;
+                }
+                Err(e) => hub.publish(serde_json::json!({"type": "notice", "text": format!("Chưa đổi được nguồn dịch: {e}")}).to_string()),
+            }
+        }
         match jobs.recv_timeout(TICK) {
             Ok(job) => {
                 newest = job.0;
@@ -469,12 +511,18 @@ fn translator_worker(t: translate::Translator, engine: Arc<dyn Engine>, hub: web
         }
 
         waiting.retain(|(seq, index)| {
-            let Some(translation) = t.lock().unwrap().cached(&unit(*index).text).cloned() else { return true };
+            let text = unit(*index).text;
+            let (translation, google) = {
+                let t = t.lock().unwrap();
+                let Some(translation) = t.cached(&text).cloned() else { return true };
+                (translation, t.by_google(&text))
+            };
             // a translation that comes after its passage has scrolled by says which one it is for
             let late = if *seq == newest { String::new() } else { format!("\x1b[2m#{index}\x1b[0m ") };
             println!("{late}\x1b[36m{translation}\x1b[0m");
             let _ = std::io::stdout().flush();
-            hub.publish(serde_json::json!({"type": "translation", "seq": seq, "tr": translation}).to_string());
+            let via = if google { "google" } else { "gemini" };
+            hub.publish(serde_json::json!({"type": "translation", "seq": seq, "tr": translation, "via": via}).to_string());
             false
         });
 
@@ -493,18 +541,24 @@ fn translator_worker(t: translate::Translator, engine: Arc<dyn Engine>, hub: web
         let (client, t, fetching) = (client.clone(), t.clone(), fetching.clone());
         thread::spawn(move || {
             let mut result = client.translate(&context, &missing).map(|tr| (missing, tr));
-            if let Err(e) = &result {
+            if let Err(e) = result.as_ref().map_err(String::clone) {
                 eprintln!("\x1b[33mtranslation failed: {e}\x1b[0m");
+                if let Some(only) = only.filter(|_| client.service != translate::Service::Google) {
+                    // the service is out: Google translates the passage being read, so
+                    // that the reader is not kept waiting
+                    let only = vec![only];
+                    result = client.google(&only).map(|tr| (only, (tr, translate::Via::Google)));
+                    match &result {
+                        Ok(_) => eprintln!("\x1b[33mthis passage is translated by Google instead\x1b[0m"),
+                        Err(e) => eprintln!("\x1b[33mGoogle failed as well: {e}\x1b[0m"),
+                    }
+                }
                 if e.contains("429") {
                     thread::sleep(Duration::from_secs(30));
-                } else if let Some(only) = only {
-                    // a smaller request is more likely to come back well-formed
-                    let only = vec![only];
-                    result = client.translate(&context, &only).map(|tr| (only, tr));
                 }
             }
             match result {
-                Ok((lines, translations)) => t.lock().unwrap().store(&lines, translations),
+                Ok((lines, (translations, via))) => t.lock().unwrap().store(&lines, translations, via),
                 // do not ask again at once: the loop would retry every tick
                 Err(_) => thread::sleep(RETRY_AFTER),
             }

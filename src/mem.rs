@@ -91,6 +91,13 @@ pub struct Stats {
     pub maps: usize,
 }
 
+/// The name of a process: the first 15 bytes of its file name, which may
+/// end in the middle of a character.
+pub fn name(pid: u32) -> String {
+    let name = std::fs::read(format!("/proc/{pid}/comm")).unwrap_or_default();
+    String::from_utf8_lossy(&name).trim().replace('\t', " ")
+}
+
 pub struct Proc {
     pub pid: u32,
     mem: File,

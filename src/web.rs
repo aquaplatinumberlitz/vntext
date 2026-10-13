@@ -17,6 +17,7 @@ const HISTORY: usize = 200;
 struct State {
     clients: Vec<Sender<String>>,
     history: VecDeque<String>,
+    messages: u64,
 }
 
 #[derive(Clone, Default)]
@@ -31,6 +32,13 @@ impl Hub {
         if state.history.len() > HISTORY {
             state.history.pop_front();
         }
+    }
+
+    /// The number of the next message, whoever shows it.
+    pub fn next_seq(&self) -> u64 {
+        let mut state = self.0.lock().unwrap();
+        state.messages += 1;
+        state.messages
     }
 
     /// The events from now on, for a listener in this program.
