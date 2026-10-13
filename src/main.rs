@@ -1,3 +1,5 @@
+#[allow(dead_code)] // until the lookup that uses it is written
+mod dict;
 mod engines;
 mod mem;
 mod ocr;
