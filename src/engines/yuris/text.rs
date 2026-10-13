@@ -68,6 +68,7 @@ pub struct Commands {
     pub count: usize,
     pub word: u8,
     pub return_code: u8,
+    pub gosub: u8,
 }
 
 pub fn commands(data: &[u8]) -> Option<Commands> {
@@ -88,7 +89,7 @@ pub fn commands(data: &[u8]) -> Option<Commands> {
         }
     }
     let number = |name: &[u8]| names.iter().position(|n| *n == name).map(|i| i as u8);
-    Some(Commands { count, word: number(b"WORD")?, return_code: number(b"RETURNCODE")? })
+    Some(Commands { count, word: number(b"WORD")?, return_code: number(b"RETURNCODE")?, gosub: number(b"GOSUB")? })
 }
 
 /// The sections of a compiled script, still encrypted: commands (4 bytes
@@ -188,6 +189,49 @@ pub fn lines(script: &Sections, key: [u8; 4], commands: &Commands) -> Vec<Line> 
     found
 }
 
+/// A menu of choices.
+pub struct Menu {
+    /// the number of the command after the one that puts it up
+    pub returns_to: u32,
+    pub choices: Vec<String>,
+}
+
+/// The routine of the engine's script library that puts up a menu. It is
+/// called with `GOSUB`: its name, then a label for each choice.
+const MENU_ROUTINE: &[u8] = b"ES.SEL.SET";
+
+/// A string as an argument holds it: `M`, its length in two bytes and the
+/// string in quotes of one kind or another, sometimes nested.
+fn literal(argument: &[u8]) -> Option<String> {
+    let quoted = argument.strip_prefix(b"M")?.get(2..)?;
+    let text = SHIFT_JIS.decode(quoted).0;
+    Some(text.trim_matches(|c| matches!(c, '"' | '\'' | '`')).to_string())
+}
+
+/// Collects a script's menus.
+pub fn menus(script: &Sections, key: [u8; 4], commands: &Commands) -> Vec<Menu> {
+    let (list, arguments, data) = (clear(script.commands, key), clear(script.arguments, key), clear(script.data, key));
+    let value = |argument: usize| {
+        let (size, at) = (word(&arguments, argument * 12 + 4)?, word(&arguments, argument * 12 + 8)?);
+        data.get(at..at + size)
+    };
+    let mut found = Vec::new();
+    let mut argument = 0;
+    for (number, command) in list.chunks_exact(4).enumerate() {
+        let count = command[1] as usize;
+        let routine = value(argument).and_then(literal).filter(|_| command[0] == commands.gosub && count >= 1);
+        if routine.is_some_and(|name| name.as_bytes().eq_ignore_ascii_case(MENU_ROUTINE)) {
+            let labels = (1..count).filter_map(|k| value(argument + k).and_then(literal));
+            let choices: Vec<String> = labels.filter(|label| !label.is_empty()).collect();
+            if !choices.is_empty() {
+                found.push(Menu { returns_to: number as u32 + 1, choices });
+            }
+        }
+        argument += count;
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,7 +239,7 @@ mod tests {
     #[test]
     fn script_text_and_key() {
         let key = [0x60, 0x5E, 0x41, 0x4A];
-        let commands = Commands { count: 119, word: 106, return_code: 79 };
+        let commands = Commands { count: 119, word: 106, return_code: 79, gosub: 29 };
         let said = SHIFT_JIS.encode("【獅堂】「やっと昼休みか」").0.into_owned();
         // WORD with one argument, RETURNCODE, two more commands; lines 3, 3, 4, 9
         let list = [106u8, 1, 0, 0, 79, 0, 0, 0, 5, 0, 0, 0, 7, 0, 0, 0];
@@ -212,6 +256,28 @@ mod tests {
         let found = lines(&script, key, &commands);
         assert_eq!(found.len(), 1);
         assert_eq!((found[0].ends_at, found[0].speaker.as_deref(), found[0].text.as_str()), (1, Some("獅堂"), "「やっと昼休みか」"));
+    }
+
+    #[test]
+    fn menu() {
+        let key = [1, 2, 3, 4];
+        let commands = Commands { count: 119, word: 106, return_code: 79, gosub: 29 };
+        // some command, then GOSUB with the routine, two labels and an empty one
+        let values: [&[u8]; 4] = [b"M\x0c\x00\"ES.SEL.SET\"", b"M\x06\x00`\"Go\"`", b"M\x06\x00\"Stay\"", b"M\x02\x00''"];
+        let mut data = Vec::new();
+        let mut arguments = Vec::new();
+        for value in values {
+            arguments.extend([0u8; 4]);
+            arguments.extend((value.len() as u32).to_le_bytes());
+            arguments.extend((data.len() as u32).to_le_bytes());
+            data.extend_from_slice(value);
+        }
+        let list = [5u8, 0, 0, 0, 29, 4, 0, 0];
+        let (list, arguments, data) = (clear(&list, key), clear(&arguments, key), clear(&data, key));
+        let script = Sections { count: 2, commands: &list, arguments: &arguments, data: &data, lines: &[] };
+        let found = menus(&script, key, &commands);
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].returns_to, found[0].choices.clone()), (2, vec!["Go".to_string(), "Stay".to_string()]));
     }
 
     #[test]

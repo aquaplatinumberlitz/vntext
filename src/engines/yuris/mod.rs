@@ -28,11 +28,23 @@ mod text;
 /// four long in newer ones (494), so it is four or five cells before.
 const COUNTER_BEFORE: [u64; 2] = [4, 5];
 const SCRIPT_AFTER: u64 = 2;
+/// A context keeps its calls further on: a number (how deep it is, or how
+/// much room there is) and then a pointer to a frame for each level. A frame
+/// is `?, return: command number, script`. Where that is differs between
+/// versions (0x110 after the context's cell in 488, 0x270 in 479), so it is
+/// looked for in this stretch.
+const CALLS_WITHIN: std::ops::Range<usize> = 0x40..0x400;
+const MAX_COUNT: u32 = 0x1000;
+/// Shown before each choice of a menu.
+const CHOICE_MARK: &str = "▶ ";
 
 struct Script {
     commands: u32,
     /// line shown after the command with this number has run
     lines: HashMap<u32, usize>,
+    /// menu that is up while a call from this script is to return to the
+    /// command with this number
+    menus: HashMap<u32, usize>,
 }
 
 pub struct Game {
@@ -97,13 +109,25 @@ impl Game {
         let mut parsed = parsed;
         parsed.sort_by_key(|(number, _)| *number);
         for (number, sections) in parsed {
-            let mut script = Script { commands: sections.count as u32, lines: HashMap::new() };
+            let mut script = Script { commands: sections.count as u32, lines: HashMap::new(), menus: HashMap::new() };
+            // lines and menus, in the order the script has them; a menu is
+            // kept as a line of its own, one choice to a row
+            let mut menus = text::menus(&sections, key, &commands).into_iter().peekable();
             for line in text::lines(&sections, key, &commands) {
+                while let Some(menu) = menus.next_if(|menu| menu.returns_to <= line.ends_at) {
+                    script.menus.insert(menu.returns_to, game.lines.len());
+                    game.lines.push(menu_line(menu));
+                }
                 script.lines.insert(line.ends_at, game.lines.len());
                 game.lines.push(line);
             }
-            // scripts without text are the engine's own; their tasks are of no interest
-            if !script.lines.is_empty() {
+            for menu in menus {
+                script.menus.insert(menu.returns_to, game.lines.len());
+                game.lines.push(menu_line(menu));
+            }
+            // scripts with neither text nor menus are the engine's own; their
+            // tasks are of no interest
+            if !script.lines.is_empty() || !script.menus.is_empty() {
                 game.scripts.insert(number, script);
             }
         }
@@ -123,6 +147,38 @@ impl Game {
     }
 }
 
+/// A menu as a passage: no speaker, a row for each choice.
+fn menu_line(menu: text::Menu) -> text::Line {
+    let rows: Vec<String> = menu.choices.iter().map(|choice| format!("{CHOICE_MARK}{choice}")).collect();
+    text::Line { ends_at: menu.returns_to, speaker: None, text: rows.join("\n") }
+}
+
+impl Game {
+    /// The menu that the task of this context has put up: its outermost call,
+    /// the one from the story script, is to return to just after a menu.
+    /// When the task runs in the library, that frame is always the call that
+    /// brought it there, so the deeper ones need not be looked at.
+    fn menu(&self, p: &Proc, addr: u64) -> Option<usize> {
+        let mut block = vec![0u8; CALLS_WITHIN.end];
+        let n = p.read(addr, &mut block);
+        let cells: Vec<u32> = block[..n & !3].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+        let frame = |at: u32| -> Option<usize> {
+            let mut frame = [0u8; 12];
+            (p.read(at as u64, &mut frame) == 12).then_some(())?;
+            let field = |k: usize| u32::from_le_bytes(frame[k * 4..k * 4 + 4].try_into().unwrap());
+            self.scripts.get(&field(2))?.menus.get(&field(1)).copied()
+        };
+        // the first frame pointer is the one after a small number (not a pointer)
+        (CALLS_WITHIN.start / 4..cells.len()).find_map(|k| {
+            let before = cells[k];
+            if before == 0 || before > MAX_COUNT {
+                return None;
+            }
+            frame(*cells.get(k + 1)?)
+        })
+    }
+}
+
 pub fn detect(p: &Proc) -> Option<Box<dyn Engine>> {
     Game::find(p).map(|game| Box::new(game) as Box<dyn Engine>)
 }
@@ -138,7 +194,7 @@ impl Engine for Game {
 
     fn passage(&self, index: usize) -> Passage {
         let line = &self.lines[index];
-        Passage { speaker: line.speaker.clone(), lines: vec![line.text.clone()], raw: line.text.clone() }
+        Passage { speaker: line.speaker.clone(), lines: line.text.lines().map(str::to_string).collect(), raw: line.text.clone() }
     }
 
     /// Finds the contexts of tasks that run a script with text. The engine
@@ -170,14 +226,18 @@ impl Engine for Game {
                 }
             });
         }
-        cells.retain(|addr| self.context(p, *addr).is_some());
+        cells.retain(|addr| self.context(p, *addr).is_some() || self.menu(p, *addr).is_some());
         Position { cells: cells.into_iter().map(|addr| Cell { addr, trusted: true }).collect() }
     }
 
     /// The cell is a context's pointer to the script's data. The script's
     /// number is read every time: the same context goes from script to script.
     fn read(&self, p: &Proc, addr: u64) -> Option<usize> {
-        let (next, script) = self.context(p, addr)?;
-        script.lines.get(&next.checked_sub(1)?).copied()
+        // While a menu is up the task runs the library's menu routine, a
+        // script without text; the menu is told by where the call returns to.
+        match self.context(p, addr) {
+            Some((next, script)) => script.lines.get(&next.checked_sub(1)?).copied(),
+            None => self.menu(p, addr),
+        }
     }
 }

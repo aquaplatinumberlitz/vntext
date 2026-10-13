@@ -19,6 +19,10 @@ mod text;
 
 const SIGNATURE: &[u8] = b"BSXScript 3.";
 const SHOW_MESSAGE: u8 = 0x1D;
+const CHOICE: u8 = 0x33;
+const WAIT_CHOICE: u8 = 0x34;
+/// Shown before each choice of a menu.
+const CHOICE_MARK: &str = "▶ ";
 /// Fewer messages than this and the "script" is something else.
 const MIN_MESSAGES: usize = 50;
 /// The VM state is searched this far before and after the script pointer.
@@ -32,6 +36,8 @@ struct Show {
     end: u32,
     message: usize,
     speaker: Option<usize>,
+    /// for a menu, the messages that are its choices; `message` is then unused
+    choices: Vec<usize>,
 }
 
 pub struct Script {
@@ -39,6 +45,8 @@ pub struct Script {
     data: Vec<u8>,
     shows: Vec<Show>,
     by_start: HashMap<u32, usize>,
+    /// menus by where the VM stands while one is up
+    by_wait: HashMap<u32, usize>,
     names: Vec<usize>,
     messages: Vec<usize>,
     /// address of the cell that points at the script, inside the VM state
@@ -82,6 +90,7 @@ impl Script {
         let messages = table(0x98, 0x9C, 0xA0)?;
 
         let mut shows = Vec::new();
+        let (mut choices, mut menu_at) = (Vec::new(), 0);
         let mut at = 0;
         while at < code.len() {
             let op = code[at];
@@ -93,11 +102,26 @@ impl Script {
                 let message = word(code, at + 2)?;
                 let speaker = if kind > 0 { Some(word(code, at + 6)?) } else { None };
                 if message < messages.len() && speaker.is_none_or(|s| s < names.len()) {
-                    shows.push(Show { start: at as u32, end: (at + len) as u32, message, speaker });
+                    shows.push(Show { start: at as u32, end: (at + len) as u32, message, speaker, choices: Vec::new() });
                 }
                 at += len;
             } else if op == 0x3E {
                 at += 5 + 4 * word(code, at + 1)?;
+            } else if op == CHOICE {
+                // 33 | number: u32 | ?: u32 | message: u32, once for each
+                // choice of a menu, with other instructions in between
+                if choices.is_empty() {
+                    menu_at = at;
+                }
+                choices.extend(word(code, at + 9).filter(|message| *message < messages.len()));
+                at += fixed_length(op)?;
+            } else if op == WAIT_CHOICE {
+                // waits for the reader to pick one of the choices given so far
+                at += fixed_length(op)?;
+                if !choices.is_empty() {
+                    let choices = std::mem::take(&mut choices);
+                    shows.push(Show { start: menu_at as u32, end: at as u32, message: 0, speaker: None, choices });
+                }
             } else {
                 at += fixed_length(op)?;
             }
@@ -105,8 +129,9 @@ impl Script {
         if shows.len() < MIN_MESSAGES {
             return None;
         }
-        let by_start = shows.iter().enumerate().map(|(i, s)| (s.start, i)).collect();
-        Some(Script { version, data, shows, by_start, names, messages, vm: 0, family: String::new(), given: String::new() })
+        let by_start = shows.iter().enumerate().filter(|(_, s)| s.choices.is_empty()).map(|(i, s)| (s.start, i)).collect();
+        let by_wait = shows.iter().enumerate().filter(|(_, s)| !s.choices.is_empty()).map(|(i, s)| (s.end, i)).collect();
+        Some(Script { version, data, shows, by_start, by_wait, names, messages, vm: 0, family: String::new(), given: String::new() })
     }
 
     /// Looks for a loaded script: the signature, then a cell that points at
@@ -187,8 +212,13 @@ impl Engine for Script {
 
     fn passage(&self, index: usize) -> Passage {
         let show = &self.shows[index];
-        let raw = self.string(self.messages[show.message]);
         let readable = |stored: &str| text::readable(stored, &self.family, &self.given);
+        if !show.choices.is_empty() {
+            let labels = show.choices.iter().map(|choice| self.string(self.messages[*choice]));
+            let lines: Vec<String> = labels.map(|label| format!("{CHOICE_MARK}{}", readable(&label))).collect();
+            return Passage { speaker: None, raw: lines.join("\n"), lines };
+        }
+        let raw = self.string(self.messages[show.message]);
         let speaker = show.speaker.map(|s| readable(&self.string(self.names[s]))).filter(|s| !s.is_empty());
         Passage { speaker, lines: vec![readable(&raw)], raw }
     }
@@ -202,13 +232,23 @@ impl Engine for Script {
         let mut block = vec![0u8; (VM_BEFORE + VM_AFTER) as usize];
         let n = p.read(from, &mut block);
         let cells: Vec<u32> = block[..n & !3].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+        // while a menu is up the counter stands past the menu instead
+        let menu = cells.iter().any(|value| self.by_wait.contains_key(value));
         let found = cells.iter().enumerate().filter(|(_, value)| {
-            self.by_start.get(value).is_some_and(|i| cells.contains(&self.shows[*i].end))
+            self.by_start.get(value).is_some_and(|i| menu || cells.contains(&self.shows[*i].end))
         });
         Position { cells: found.map(|(k, _)| Cell { addr: from + k as u64 * 4, trusted: true }).collect() }
     }
 
     fn read(&self, p: &Proc, addr: u64) -> Option<usize> {
+        // The cell keeps the last message while a menu is up; the menu is
+        // told by the program counter, which stands just past it.
+        let mut block = vec![0u8; (VM_BEFORE + VM_AFTER) as usize];
+        let n = p.read(self.vm - VM_BEFORE, &mut block);
+        let mut cells = block[..n & !3].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()));
+        if let Some(menu) = cells.find_map(|value| self.by_wait.get(&value)) {
+            return Some(*menu);
+        }
         let mut cell = [0u8; 4];
         if p.read(addr, &mut cell) != 4 {
             return None;

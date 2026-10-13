@@ -182,6 +182,7 @@ Profile bishop (`engines/bishop/`), cho các game dùng `bsxx.dat`:
 1. Tìm chữ ký `BSXScript 3.` trong RAM, rồi tìm ô nhớ trỏ tới nó; ô kế tiếp là kích thước script. Cặp ô đó nằm trong khối trạng thái của máy ảo, ở vị trí cố định suốt lần chạy.
 2. Đọc script: bảng tên nhân vật, bảng câu thoại (UTF-16), và duyệt mã lệnh để lấy mọi lệnh "hiện câu thoại" (`0x1D`) theo thứ tự.
 3. Trong khối trạng thái, ô vị trí là ô chứa điểm đầu của một lệnh hiện thoại, khi một ô gần đó chứa điểm cuối của chính lệnh ấy.
+4. Menu lựa chọn: mỗi lựa chọn là một lệnh `0x33` mang số thứ tự câu làm nhãn, xen giữa là các lệnh khác, và lệnh `0x34` chờ người đọc chọn. Khi menu đang hiện, ô vị trí vẫn giữ câu thoại trước đó, còn bộ đếm chương trình trong khối trạng thái đứng ngay sau lệnh `0x34`; tool nhận ra menu qua giá trị đó và hiện nó thành một đoạn riêng, mỗi lựa chọn một dòng có dấu `▶`. Chế độ xem lại cảnh cũng dùng các lệnh này. Đã kiểm tra trên 牝教師, 牝教師4 và 隷従の制服 (BSXScript 3.0, 3.1, 3.3); các game còn lại dùng cùng lệnh nhưng chưa thử.
 4. Giải mã text: `\n` là xuống dòng trong khung thoại (bỏ), `\b` và `\s` đổi cỡ chữ (bỏ), `\A` và `\B` là họ và tên nhân vật chính (đọc từ `bsxx.ini` trong thư mục game), `U+E000` là dấu ♥. Các ký tự `U+E0xx` khác được suy đoán là kana có dấu đục; chưa gặp trong game để đối chiếu.
 
 Định dạng file và độ dài lệnh lấy từ [crskycode/BSXScript_Tool](https://github.com/crskycode/BSXScript_Tool).
@@ -225,6 +226,8 @@ Profile yuris (`engines/yuris/`), cho các game YU-RIS (聖奴隷学園 1–3, S
 2. Mỗi script gồm bốn phần (lệnh, tham số, dữ liệu, số dòng nguồn), mỗi phần XOR với cùng một khoá 4 byte riêng của game. Ba byte cao của khoá lộ ra qua số dòng nguồn đầu tiên; byte thấp là giá trị duy nhất làm cho, trong mọi script, số dòng không giảm và mọi mã lệnh đều tồn tại.
 3. Text là các lệnh `WORD` nối tiếp, kết thúc bằng lệnh `RETURNCODE`, là chỗ script chờ người đọc. Tên người nói nằm đầu dòng dạng `【tên】`.
 4. Engine giữ script đang nạp ở dạng đã giải mã trong RAM. Với mỗi tác vụ chạy script, nó có một khối ngữ cảnh chứa số thứ tự lệnh kế tiếp, con trỏ tới phần dữ liệu và phần số dòng của script, và số hiệu script. Số thứ tự lệnh nằm trước một dãy con trỏ dài ba ô ở phiên bản engine cũ (479) và bốn ô ở phiên bản mới (494); tool thử cả hai chỗ và lấy chỗ chứa một số hợp lệ, vì chỗ còn lại là con trỏ. Tool tìm các script đang nạp qua chữ ký `YSTB`, rồi tìm cặp ô liền nhau trỏ tới hai phần đó của cùng một script. Chỉ ngữ cảnh của script có thoại được theo dõi; các script nội bộ của engine cũng chạy thành tác vụ nhưng không có text.
+
+5. Menu lựa chọn không phải lệnh của engine mà là thủ tục `ES.SEL.SET` trong thư viện script, gọi bằng `GOSUB` với nhãn từng lựa chọn làm tham số. Khi menu đang hiện, tác vụ chạy bên trong thư viện (một script không có thoại), nên tool nhìn vào chồng lệnh gọi của ngữ cảnh: một số nhỏ rồi các con trỏ tới khung `?, lệnh sẽ quay về, số hiệu script`, mỗi tầng một khung. Khi tác vụ đang ở trong thư viện thì khung đầu tiên luôn là lệnh gọi từ script truyện đã đưa nó vào đó, nên tool chỉ cần xem khung này: nếu nó quay về ngay sau một lệnh gọi menu thì menu đó đang hiện. Chồng lệnh gọi nằm cách ô ngữ cảnh 0x110 byte ở đời 488 và 0x270 byte ở đời 479, nên tool dò trong cả vùng chứ không ghi cứng. Đã kiểm tra trên Saimin Seishidou (488) và 聖奴隷学園 (479); 聖奴隷学園3 (494) chỉ có một menu nên chưa thử, 聖奴隷学園2 không có menu nào. Kiểu chọn bằng bản đồ (`ES.CSEL.SET`) không có chữ nên bỏ qua.
 
 Định dạng file lấy từ [shimamura-sakura/yuri](https://github.com/shimamura-sakura/yuri).
 
@@ -317,9 +320,9 @@ Engine đã nhận diện được trong `/mnt/evo860/HGAME/` (theo file đặc 
 - [DCNick3/shin](https://github.com/DCNick3/shin): bản viết lại engine Entergram; nguồn của định dạng SNR, bảng ký tự và cú pháp lệnh.
 - [crskycode/BSXScript_Tool](https://github.com/crskycode/BSXScript_Tool): công cụ xuất/nhập text của `bsxx.dat`; nguồn của định dạng BSXScript.
 - [GARbro, ArcMED.cs](https://github.com/morkt/GARbro/blob/master/ArcFormats/DxLib/ArcMED.cs): định dạng gói `.med`.
-- Bộ công cụ dịch cho engine MED (`MED.py`, `SCE.py`, không rõ tác giả): cách dò khoá và định dạng script.
+- Bộ công cụ dịch cho engine MED 催眠術3-4-re (`MED.py`, `SCE.py`, https://github.com/aquaplatinumberlitz/saiminjutsu-fudegaki-backrainbow-tools): cách dò khoá và định dạng script.
 - [shimamura-sakura/yuri](https://github.com/shimamura-sakura/yuri): bộ dịch ngược và tài liệu định dạng của YU-RIS.
-- Bộ công cụ patch tiếng Anh cho 催眠術2 (`blackrb_spt.py`, không rõ tác giả): nguồn của định dạng gói `*_spt.dat` và file `.spt`.
+- Bộ công cụ patch tiếng Anh cho 催眠術2 ura催眠術2 (https://github.com/aquaplatinumberlitz/saiminjutsu-fudegaki-backrainbow-tools), không rõ tác giả): nguồn của định dạng gói `*_spt.dat` và file `.spt`.
 - [0xDC00/agent](https://github.com/0xDC00/agent): text hooker dùng Frida, điểm xuất phát của dự án.
 - [Artikash/Textractor](https://github.com/Artikash/Textractor): text hooker phổ biến nhất trên Windows; so sánh ở mục [Vì sao viết tool này](#vì-sao-viết-tool-này-khi-đã-có-textractor-và-agent).
 - [Kelebek1/Eushully-Decompiler](https://github.com/Kelebek1/Eushully-Decompiler): định dạng script và gói của engine AGE.
