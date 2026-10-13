@@ -28,6 +28,12 @@ const ARITHMETIC: u16 = 0xF000;
 const MESSAGE: u16 = 81;
 /// Where the number of a message's text is among its operands, in bytes.
 const MESSAGE_TEXT: usize = 20;
+/// A menu of choices: how many there are in its first operand (16 bits),
+/// and the numbers of their texts from this many bytes into its operands.
+const MENU: u16 = 14;
+const MENU_CHOICES: usize = 26;
+/// Shown before each choice of a menu.
+const CHOICE_MARK: &str = "▶ ";
 const HEADER: usize = 36;
 
 fn le32(data: &[u8], at: usize) -> Option<usize> {
@@ -68,7 +74,7 @@ pub struct Message {
     pub text: String,
 }
 
-/// The messages of a script. A script is a header of nine numbers (`file
+/// The messages and menus of a script. A script is a header of nine numbers (`file
 /// length, header length, code length, string table length, strings
 /// length`, ...), the code, a table of where each string starts, and the
 /// strings, in Shift-JIS and ended by a zero.
@@ -98,6 +104,14 @@ pub fn messages(script: &[u8]) -> Option<(Shape, Vec<Message>)> {
         if op == MESSAGE {
             let text = string(le32(code, at + 2 + MESSAGE_TEXT)?).unwrap_or_default();
             found.push(Message { end: next as u32, text });
+        } else if op == MENU {
+            // a menu is given as a message of its own, one line for each choice
+            let count = u16::from_le_bytes([*code.get(at + 2)?, *code.get(at + 3)?]) as usize;
+            let choices = (0..count).filter_map(|k| string(le32(code, at + 2 + MENU_CHOICES + k * 4)?));
+            // a choice starts with a tag such as `<01>`
+            let label = |c: &String| c.split_once('>').filter(|_| c.starts_with('<')).map_or(c.clone(), |(_, l)| l.to_string());
+            let lines: Vec<String> = choices.filter(|c| !c.is_empty()).map(|c| format!("{CHOICE_MARK}{}", label(&c))).collect();
+            found.push(Message { end: next as u32, text: lines.join("^n") });
         }
         at = next;
     }

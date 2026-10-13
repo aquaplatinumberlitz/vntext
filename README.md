@@ -56,7 +56,7 @@ Nếu chơi trên Windows, hoặc game dùng engine chưa có profile, Textracto
 | 聖奴隷学園 1, 2, 3, Saimin Seishidou Secret Lesson (bản tiếng Anh) | YU-RIS (479, 488, 494) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra |
 | VenusBlood Savior, VenusBlood Valkyrie | Ninetail (Unity, Mono 32-bit) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra (Savior 2.04, Valkyrie 1.04) |
 | 封緘のグラセスタ | AGE của Eushully (SYS4) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, đã kiểm tra; chưa hiện khung lựa chọn |
-| 信天翁航海録 | Liar-soft (script `.gsc`) | Windows, Proton-GE qua Faugus | Chính xác từng câu, đã kiểm tra; chưa hiện khung lựa chọn |
+| 信天翁航海録 | Liar-soft (script `.gsc`) | Windows, Proton-GE qua Faugus | Chính xác từng câu, kể cả khung lựa chọn, đã kiểm tra |
 | 廃村少女 弐 | Escu:de | Windows, Proton-GE qua Faugus | Chính xác từng trang thoại, đã kiểm tra (kể cả ngay sau khi load save) |
 | Game engine khác | chưa có profile | bất kỳ | Chỉ có chế độ quét chung, chưa dùng được (xem [Giới hạn](#giới-hạn)) |
 
@@ -252,7 +252,7 @@ Profile liar (`engines/liar/`), cho engine của Liar-soft (信天翁航海録):
 
 1. Script là các file `.gsc` trong gói `scr.xfl`. Gói không nén: một bảng tên file kèm vị trí và độ dài.
 2. Mỗi script gồm header chín số, phần lệnh, bảng vị trí chuỗi và các chuỗi Shift-JIS. Lệnh là mã 16 bit và các tham số có độ dài cố định theo mã. Bảng độ dài khác nhau giữa các đời engine; game này dùng bảng `RScript19` của LiarsoftTool.
-3. Câu thoại là lệnh 81, tham số thứ sáu là số thứ tự chuỗi. Tên người nói nằm đầu chuỗi dạng `【tên】`; `^n` là xuống dòng; `|chữ[cách đọc]` hoặc `chữ[cách đọc]` là furigana, tool giữ chữ và bỏ cách đọc.
+3. Câu thoại là lệnh 81, tham số thứ sáu là số thứ tự chuỗi. Tên người nói nằm đầu chuỗi dạng `【tên】`; `^n` là xuống dòng; `|chữ[cách đọc]` hoặc `chữ[cách đọc]` là furigana, tool giữ chữ và bỏ cách đọc. Menu lựa chọn là lệnh 14, mang số lượng và số thứ tự chuỗi của từng lựa chọn; tool hiện nó thành một đoạn riêng, mỗi lựa chọn một dòng có dấu `▶`.
 4. Trong RAM, trình thông dịch có một bản ghi cho script đang chạy: con trỏ tới phần lệnh, ba độ dài lấy từ header (phần lệnh, số chuỗi, phần chuỗi) và con trỏ tới lệnh sắp chạy. Ba độ dài đó khác nhau ở mọi script của game nên tool dùng chúng để tìm bản ghi và biết script nào đang chạy. Khi một câu đang hiện, con trỏ lệnh đứng ngay sau lệnh của câu đó.
 
 Định dạng file và bảng lệnh lấy từ [Love-in-idleness/LiarsoftTool](https://github.com/Love-in-idleness/LiarsoftTool).
