@@ -1,5 +1,8 @@
 mod engines;
 mod mem;
+mod ocr;
+mod overlay;
+mod screen;
 mod text;
 mod translate;
 mod web;
@@ -24,16 +27,19 @@ usage:
   vntext strings <pid|name> [--min N] [--all]            dump every Japanese string in memory
   vntext find    <pid|name> <text> [--all]               locate a known string
   vntext watch   <pid|name> <hex addr> <utf8|utf16|sjis> [--clip]
+  vntext ocr     <pid|name> [--pick] [--clip]             read the text box from pictures of it (needs GEMINI_API_KEY)
 
   --min N   minimum characters per string (default 4)
   --all     also scan read-only memory
   --clip    copy each line to the clipboard (wl-copy)
+  --pick    ocr: point out the text box again (asked the first time a game is read)
 
-when the game's engine is recognised (Entergram shin, BISHOP BSXScript, BLACKRAINBOW spt and MED, Astronauts ArkEngine, YU-RIS), auto also takes:
+auto, when it recognises the game's engine, and ocr also take:
   --raw          print text as the engine stores it, control codes included
   --debug        log every change of the cells that hold a reading position
   --web          serve a live page for reading with Yomitan (http://127.0.0.1:8777)
   --port N       port for --web
+  --overlay      show each message, translated if --translate is given, in a strip by the game's window
   --translate    translate each message with the Gemini API (needs GEMINI_API_KEY)
   --to LANG      target language (default vi)
   --model ID     Gemini model (default: newest Flash-Lite the API offers)";
@@ -66,6 +72,8 @@ struct Opts {
     web: bool,
     port: u16,
     debug: bool,
+    pick: bool,
+    overlay: bool,
 }
 
 fn parse_args() -> Opts {
@@ -81,6 +89,8 @@ fn parse_args() -> Opts {
         web: false,
         port: 8777,
         debug: false,
+        pick: false,
+        overlay: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -91,6 +101,8 @@ fn parse_args() -> Opts {
             "--translate" => o.translate = true,
             "--web" => o.web = true,
             "--debug" => o.debug = true,
+            "--pick" => o.pick = true,
+            "--overlay" => o.overlay = true,
             "--to" => o.to = it.next().unwrap_or_else(|| die("--to needs a language")),
             "--model" => o.model = Some(it.next().unwrap_or_else(|| die("--model needs a model id"))),
             "--port" => o.port = it.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| die("--port needs a number")),
@@ -124,6 +136,7 @@ fn main() {
                 None => auto(p, cfg, &o),
             }
         }
+        ["ocr", target] => ocr::run(mem::resolve(target).unwrap_or_else(|e| die(&e)), &o),
         ["strings", target] => strings(open(target), cfg, &o),
         ["find", target, needle] => find(open(target), needle, &o),
         ["watch", target, addr, enc] => {
@@ -287,6 +300,9 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
             Ok(()) => eprintln!("page for Yomitan: http://127.0.0.1:{}", o.port),
             Err(e) => die(&format!("cannot serve on port {}: {e}", o.port)),
         }
+    }
+    if o.overlay {
+        overlay::start(hub.subscribe(), p.pid);
     }
     let jobs = o.translate.then(|| {
         let translator = translate::Translator::new(&o.to, o.model.clone()).unwrap_or_else(|e| die(&e));

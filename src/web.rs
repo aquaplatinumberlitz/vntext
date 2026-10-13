@@ -33,6 +33,13 @@ impl Hub {
         }
     }
 
+    /// The events from now on, for a listener in this program.
+    pub fn subscribe(&self) -> mpsc::Receiver<String> {
+        let (tx, rx) = mpsc::channel();
+        self.0.lock().unwrap().clients.push(tx);
+        rx
+    }
+
     pub fn serve(&self, port: u16) -> std::io::Result<()> {
         let listener = TcpListener::bind(("127.0.0.1", port))?;
         let hub = self.clone();

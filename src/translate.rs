@@ -49,7 +49,7 @@ fn api_error(e: ureq::Error) -> String {
 
 impl Translator {
     pub fn new(language: &str, model: Option<String>) -> Result<Translator, String> {
-        let key = std::env::var(KEY_VAR).map_err(|_| format!("set {KEY_VAR} to use --translate"))?;
+        let key = std::env::var(KEY_VAR).map_err(|_| format!("set {KEY_VAR} to use the Gemini API"))?;
         let model = match model {
             Some(m) => m,
             None => newest_flash_lite(&key)?,
@@ -125,11 +125,68 @@ impl Client {
     }
 }
 
-fn parse_reply(reply: &Value) -> Result<Vec<String>, String> {
-    let text = reply["candidates"][0]["content"]["parts"][0]["text"]
+/// What a picture of a game's text box says.
+#[derive(Debug, PartialEq)]
+pub struct Shown {
+    pub speaker: Option<String>,
+    pub text: String,
+    pub translation: Option<String>,
+}
+
+impl Client {
+    /// Reads the Japanese text in a PNG picture of a game's text box and,
+    /// if asked, translates it in the same request. `context` holds the text
+    /// read just before, for the model's reference only.
+    pub fn read(&self, png: &[u8], context: &[String], translate: bool) -> Result<Shown, String> {
+        let mut system = "The picture is the text box of a Japanese visual novel. \
+             Give the Japanese text in it as `text`, exactly as written and with its line breaks, \
+             leaving out furigana (the small readings above kanji) and anything that is not part of the passage, such as buttons. \
+             If the name of the speaker is shown apart from the passage give it as `speaker`, otherwise leave `speaker` empty. \
+             If the picture shows no Japanese passage, leave `text` empty."
+            .to_string();
+        let mut properties = json!({"speaker": {"type": "STRING"}, "text": {"type": "STRING"}});
+        let mut required = vec!["speaker", "text"];
+        if translate {
+            system += &format!(
+                " Then give as `translation` a faithful and natural translation of `text` into {}, \
+                 keeping the speaker's tone and the line breaks. \
+                 The text that follows the picture is JSON whose `previous_lines` is what was shown before, for context only.",
+                self.language
+            );
+            properties["translation"] = json!({"type": "STRING"});
+            required.push("translation");
+        }
+        let picture = json!({"inlineData": {"mimeType": "image/png", "data": crate::screen::base64(png)}});
+        let body = json!({
+            "systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [picture, {"text": json!({"previous_lines": context}).to_string()}]}],
+            "generationConfig": {
+                "temperature": 0.3,
+                "responseMimeType": "application/json",
+                "responseSchema": {"type": "OBJECT", "properties": properties, "required": required},
+            },
+        });
+        let url = format!("{API}/models/{}:generateContent", self.model);
+        let mut response = ureq::post(&url).header("x-goog-api-key", &self.key).send_json(&body).map_err(api_error)?;
+        let reply: Value = response.body_mut().read_json().map_err(|e| e.to_string())?;
+        parse_shown(&reply)
+    }
+}
+
+fn reply_text(reply: &Value) -> Result<&str, String> {
+    reply["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
-        .ok_or_else(|| format!("no text in reply: {}", reply.to_string().chars().take(200).collect::<String>()))?;
-    serde_json::from_str(text).map_err(|e| format!("reply is not a JSON array of strings: {e}"))
+        .ok_or_else(|| format!("no text in reply: {}", reply.to_string().chars().take(200).collect::<String>()))
+}
+
+fn parse_reply(reply: &Value) -> Result<Vec<String>, String> {
+    serde_json::from_str(reply_text(reply)?).map_err(|e| format!("reply is not a JSON array of strings: {e}"))
+}
+
+fn parse_shown(reply: &Value) -> Result<Shown, String> {
+    let shown: Value = serde_json::from_str(reply_text(reply)?).map_err(|e| format!("reply is not JSON: {e}"))?;
+    let field = |name: &str| shown[name].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    Ok(Shown { speaker: field("speaker"), text: field("text").unwrap_or_default(), translation: field("translation") })
 }
 
 /// Model ids change every few months, so ask the API which Flash-Lite models
@@ -191,6 +248,14 @@ mod tests {
         let reply = json!({"candidates": [{"content": {"parts": [{"text": "[\"a\", \"b\"]"}]}}]});
         assert_eq!(parse_reply(&reply).unwrap(), vec!["a", "b"]);
         assert!(parse_reply(&json!({"error": {"message": "nope"}})).is_err());
+    }
+
+    #[test]
+    fn shown_parsing() {
+        let reply = |text: &str| json!({"candidates": [{"content": {"parts": [{"text": text}]}}]});
+        let shown = parse_shown(&reply(r#"{"speaker": "", "text": " 一行目\n二行目 ", "translation": "x"}"#)).unwrap();
+        assert_eq!(shown, Shown { speaker: None, text: "一行目\n二行目".to_string(), translation: Some("x".to_string()) });
+        assert_eq!(parse_shown(&reply(r#"{"speaker": "誰か", "text": ""}"#)).unwrap().text, "");
     }
 
     #[test]

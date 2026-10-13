@@ -71,12 +71,25 @@ cargo build --release
 - `ryujinx` là tên process (khớp một phần, không phân biệt hoa thường); cũng có thể đưa PID. Process có tên khớp được ưu tiên hơn process chỉ có chuỗi đó trong dòng lệnh, vì game chạy qua launcher có các lớp bọc (umu-run, proton) mang đường dẫn game làm tham số.
 - `--web` mở trang `http://127.0.0.1:8777`: mỗi đoạn thoại hiện lên cùng bản dịch, rê chuột để tra từ bằng Yomitan.
 - `--translate` cần biến môi trường `GEMINI_API_KEY`. Mặc định dịch sang tiếng Việt (`--to en` để đổi) bằng model Flash-Lite mới nhất mà API liệt kê (`--model` để chỉ định).
+- `--overlay` hiện đoạn thoại đang đọc (bản dịch nếu có `--translate`) trong một dải nổi ngay dưới cửa sổ game; hết chỗ bên dưới thì dải nằm ở mép trên bên trong cửa sổ. Dải chỉ hiện khi cửa sổ game đang được chọn, và click xuyên qua nó.
+
+Game chưa có profile thì đọc bằng ảnh chụp khung thoại:
+
+```
+./target/release/vntext ocr <pid|tên> --translate --overlay
+```
+
+- Lần đầu với mỗi game, tool hỏi khung thoại ở đâu: đưa chuột tới góc trên trái của khung rồi nhấn Enter trong terminal, rồi tới góc dưới phải. Vùng này lưu theo tên process trong `~/.config/vntext/regions.tsv`; thêm `--pick` để khoanh lại.
+- Mỗi khi khung thoại đổi và đứng yên, ảnh vùng đó (PNG xám 16 mức, vài KB) được gửi lên Gemini, một lần gọi trả về người nói, câu tiếng Nhật và bản dịch. Luôn cần `GEMINI_API_KEY`, kể cả khi không dịch.
+- `--debug` lưu ảnh vừa gửi vào `~/.cache/vntext/ocr.png` và in thời gian trả lời.
+- Phần chụp và nén ảnh đã thử trên 催眠術2; phần gọi Gemini chưa chạy thử lần nào. Game vẽ bằng GPU và Ryujinx cũng chưa thử.
 
 Các lệnh khác:
 
 | Lệnh | Tác dụng |
 |---|---|
 | `auto <pid\|tên>` | Theo dõi và in đoạn thoại mới. Tự nhận engine; không nhận ra thì quét chung |
+| `ocr <pid\|tên>` | Đọc khung thoại từ ảnh chụp qua Gemini, cho game chưa có profile |
 | `strings <pid\|tên>` | In mọi chuỗi tiếng Nhật đang có trong bộ nhớ. Dùng để khảo sát game mới |
 | `find <pid\|tên> <chuỗi>` | Tìm địa chỉ một chuỗi đã biết, ở cả ba bảng mã |
 | `watch <pid\|tên> <địa chỉ hex> <utf8\|utf16\|sjis>` | Theo dõi một địa chỉ cố định |
@@ -95,10 +108,11 @@ Máy mới cần:
    sudo sysctl kernel.yama.ptrace_scope=0                                         # tới lần khởi động lại
    echo 'kernel.yama.ptrace_scope = 0' | sudo tee /etc/sysctl.d/10-ptrace.conf   # giữ luôn
    ```
-3. **Rust** (`cargo`) để build: `cargo build --release`. Các thư viện đều là Rust thuần, không cần gói hệ thống nào. Cũng có thể chép thẳng file `target/release/vntext` sang máy x86-64 khác.
+3. **Rust** (`cargo`) để build: `cargo build --release`. Cần hai gói hệ thống cho dải nổi: `gtk4` và `gtk4-layer-shell` (Arch: `sudo pacman -S gtk4 gtk4-layer-shell`). Chép thẳng file `target/release/vntext` sang máy x86-64 khác cũng được, miễn máy đó có hai gói này.
 4. **Game đủ file.** Text lấy từ file của game (gói script, bundle...), nên thư mục game phải nguyên vẹn và tool phải đọc được nó. Bản vá cài đè vào thư mục game được đọc theo luôn.
 5. **Cho phần dịch:** đặt `GEMINI_API_KEY`. Bản dịch đã có nằm ở `~/.cache/vntext/<ngôn ngữ>.tsv`; chép theo nếu không muốn dịch lại.
 6. **Tuỳ chọn:** `wl-copy` cho `--clip`; trình duyệt có Yomitan cho `--web`.
+7. **Cho `--overlay` và `ocr`:** game phải là cửa sổ X11 (qua XWayland), vì tool tìm và chụp cửa sổ game qua X11; với Faugus là tắt Wayland driver. Dải nổi cần compositor Wayland có layer-shell (đã thử trên KWin 6.7).
 
 Đổi phiên bản Wine/Proton hay giả lập không ảnh hưởng, vì tool tìm theo cấu trúc dữ liệu của engine game chứ không phải của lớp chạy game. Thứ làm hỏng một profile là bản game mới đổi cấu trúc của chính engine; khi đó tool báo không tìm thấy vị trí đọc chứ không hiện sai text.
 
