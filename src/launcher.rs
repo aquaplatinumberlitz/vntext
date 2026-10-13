@@ -156,6 +156,8 @@ fn recognise(pid: u32) -> Kind {
 /// The reading of a game has ended.
 struct Exit {
     pid: u32,
+    /// the process that read the game
+    reader: u32,
     /// the last thing it said, if it ended in failure
     error: Option<String>,
 }
@@ -532,6 +534,13 @@ impl Launcher {
             Ok(child) => child,
             Err(e) => return self.status.set_text(&format!("Không chạy được phần đọc: {e}")),
         };
+        // One strip at a time. The window can be brought back from the tray
+        // while a game is read; reading again then takes the place of the
+        // reading that is going on, it does not add a second strip to it.
+        if let Some(old) = self.reader.get() {
+            unsafe { libc::kill(old as i32, libc::SIGTERM) };
+        }
+        let reader = child.id();
         self.status.set_text("");
         self.window.set_visible(false);
         self.reading(Some(child.id()));
@@ -547,7 +556,7 @@ impl Launcher {
                 }
             }
             let failed = child.wait().map_or(true, |status| !status.success());
-            let _ = ended.send(Exit { pid, error: failed.then_some(last) });
+            let _ = ended.send(Exit { pid, reader, error: failed.then_some(last) });
         });
     }
 
@@ -562,6 +571,10 @@ impl Launcher {
     }
 
     fn returned(self: &Rc<Self>, exit: Exit) {
+        // a reader that was replaced by another has nothing to say: the other is at work
+        if self.reader.get() != Some(exit.reader) {
+            return;
+        }
         self.reading(None);
         let alive = std::path::Path::new(&format!("/proc/{}", exit.pid)).exists();
         match exit.error.filter(|_| alive) {

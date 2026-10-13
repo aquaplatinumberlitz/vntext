@@ -1241,10 +1241,20 @@ impl Overlay {
         modes.connect_selected_notify(move |modes| overlay.restyle(|l| l.mode = Mode::ALL.get(modes.selected() as usize).map_or(Mode::Translation, |m| m.0)));
         row("Hiện", modes.upcast_ref());
 
-        let reset = gtk4::Button::with_label("Đặt lại vị trí và bề rộng");
+        // back to how the strip is for a game never set up: where it is, how wide, and how it looks
+        let reset = gtk4::Button::with_label("Đặt lại mặc định");
+        reset.set_tooltip_text(Some("Vị trí, bề rộng, cỡ chữ, độ mờ, màu chữ và chế độ hiện về như lúc đầu"));
         reset.set_halign(gtk4::Align::Start);
-        let overlay = self.clone();
-        reset.connect_clicked(move |_| overlay.restyle(|l| l.place = None));
+        let (overlay, font, opacity, modes, all) = (self.clone(), font.clone(), opacity.clone(), modes.clone(), swatches.clone());
+        reset.connect_clicked(move |_| {
+            let fresh = Look::default();
+            overlay.restyle(|l| *l = Look { hidden: l.hidden, ..fresh.clone() });
+            // the widgets follow, which has each of them set its own part once more to the same
+            font.set_value(fresh.font as f64);
+            opacity.set_value(fresh.opacity);
+            modes.set_selected(Mode::ALL.iter().position(|m| m.0 == fresh.mode).unwrap_or(0) as u32);
+            all.borrow().iter().for_each(|(c, b)| switch(b, *c == fresh.colour));
+        });
         page.append(&reset);
         page
     }
@@ -1468,12 +1478,17 @@ impl Overlay {
     /// saved is the one that translates from then on), and the dictionaries.
     fn set_up(self: &Rc<Self>, tab: Tab) {
         let Some((x, y, width, height)) = self.ui.borrow().placed else { return };
-        if self.asking.replace(true) {
+        if self.asking.get() {
             return;
         }
         let window = floating("vntext-ask");
+        // Kept by whether the window is on screen, not by its end: what is
+        // connected to the window holds on to it, so it is never told that
+        // it was destroyed, only that it is no longer shown.
         let overlay = self.clone();
-        window.connect_destroy(move |_| overlay.asking.set(false));
+        window.connect_map(move |_| overlay.asking.set(true));
+        let overlay = self.clone();
+        window.connect_unmap(move |_| overlay.asking.set(false));
         // typing needs the keyboard, which a floating surface otherwise never takes
         window.set_keyboard_mode(KeyboardMode::Exclusive);
         let content = gtk4::Box::new(gtk4::Orientation::Vertical, 8);

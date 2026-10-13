@@ -126,7 +126,7 @@ Cụm nút bên phải cửa sổ game, từ trên xuống:
 
 - **Xem lại câu cũ:** lăn chuột trên dải. Dải ghi "3/40" khi đang xem câu cũ; có câu mới thì quay về câu mới nhất.
 - **Click xuyên qua:** ở chế độ chỉ hiện bản dịch, click đi xuyên qua dải xuống game.
-- **Hộp thiết lập** có bốn tab: Hiển thị (cỡ chữ, độ mờ nền, màu chữ, chế độ, đặt lại vị trí), Dịch, Từ điển, OCR. Đóng bằng nút X hoặc Esc. Thiết lập của dải lưu theo từng game.
+- **Hộp thiết lập** có bốn tab: Hiển thị (cỡ chữ, độ mờ nền, màu chữ, chế độ, đặt lại mặc định), Dịch, Từ điển, OCR. Đóng bằng nút X hoặc Esc. Thiết lập của dải lưu theo từng game.
 - **Lỗi** hiện bằng lời thường kèm nút việc nên làm; chuỗi lỗi gốc vẫn in ra terminal nếu bạn chạy từ đó.
 
 ### Tra từ
