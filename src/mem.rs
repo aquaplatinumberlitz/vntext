@@ -339,7 +339,8 @@ pub fn resolve(target: &str) -> Result<u32, String> {
 /// The best match for `target`: whether it matches by name, its pid and command line.
 fn find(target: &str) -> Result<Option<(bool, u32, String)>, String> {
     let needle = target.to_lowercase();
-    let name: String = needle.chars().take(COMM_LEN).collect();
+    // the limit is in bytes and may cut a character in two, so bytes are compared
+    let name = &needle.as_bytes()[..needle.len().min(COMM_LEN)];
     let me = std::process::id();
     let mut best: Option<((bool, u64), u32, String)> = None;
     for entry in fs::read_dir("/proc").map_err(|e| e.to_string())?.flatten() {
@@ -347,10 +348,10 @@ fn find(target: &str) -> Result<Option<(bool, u32, String)>, String> {
         if pid == me {
             continue;
         }
-        let comm = fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default().to_lowercase();
+        let comm = fs::read(format!("/proc/{pid}/comm")).unwrap_or_default().to_ascii_lowercase();
         let cmdline = fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
         let cmdline = String::from_utf8_lossy(&cmdline).replace('\0', " ");
-        let named = comm.contains(&name);
+        let named = memchr::memmem::find(&comm, name).is_some();
         if !named && !cmdline.to_lowercase().contains(&needle) {
             continue;
         }
