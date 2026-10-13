@@ -196,6 +196,7 @@ fn read(pid: u32, o: &Settings, hub: &web::Hub, control: &Control, reader: u64) 
     let mut context: VecDeque<String> = VecDeque::new();
     let mut asked = Instant::now() - BETWEEN_REQUESTS;
     let mut refused: Option<String> = None;
+    let mut renewed = false;
     loop {
         thread::sleep(screen.interval(&window));
         if !control.wants(reader) {
@@ -233,6 +234,15 @@ fn read(pid: u32, o: &Settings, hub: &web::Hub, control: &Control, reader: u64) 
         let earlier: Vec<String> = context.iter().cloned().collect();
         let shown = match translator.client.read(&png, &earlier, o.translate) {
             Ok(shown) => shown,
+            // the model set up is gone: Gemini's newest takes its place, once
+            Err(e) if e.contains("404") && !renewed => {
+                renewed = true;
+                match translator.client.renew() {
+                    Ok(model) => eprintln!("\x1b[33mOCR: {e}; the model set up is not there, reading with {model} instead\x1b[0m"),
+                    Err(why) => trouble(hub, &format!("OCR: {e} ({why})")),
+                }
+                continue;
+            }
             Err(e) => {
                 trouble(hub, &format!("OCR: {e}"));
                 thread::sleep(RETRY_AFTER);
@@ -245,6 +255,10 @@ fn read(pid: u32, o: &Settings, hub: &web::Hub, control: &Control, reader: u64) 
         read.push_back(now);
         if read.len() > REMEMBERED {
             read.pop_front();
+        }
+        if shown.text.is_empty() {
+            // else nothing would tell a model that reads nothing from one that is never asked
+            eprintln!("\x1b[2m  the model found no Japanese text in the picture ({} ms)\x1b[0m", asked.elapsed().as_millis());
         }
         // the same text again: the box changed its look, not what it says
         if shown.text.is_empty() || context.back() == Some(&shown.text) || !control.wants(reader) {
@@ -279,13 +293,24 @@ fn read(pid: u32, o: &Settings, hub: &web::Hub, control: &Control, reader: u64) 
 
 /// The game is read from pictures alone. With `reading` it starts at once;
 /// without, it waits for the reader to ask for it on the overlay.
+/// Writes the text box of the game as it would be sent to be read, to see
+/// what the reader is given.
+pub fn shot(pid: u32, file: &str) {
+    let screen = screen::open().unwrap_or_else(|e| die(&e));
+    let window = wait_for_window(&*screen, pid).unwrap_or_else(|| die("the process has no window that can be pictured"));
+    let region = saved_region(&mem::name(pid)).unwrap_or_else(|| die("no text box picked yet: run `vntext ocr` first"));
+    let Some(picture) = screen.grab(&window, region) else {
+        die(&format!("no picture of the window: {}", screen.refused(&window).unwrap_or_else(|| "it is not shown".to_string())));
+    };
+    std::fs::write(file, picture.png()).unwrap_or_else(|e| die(&format!("cannot write {file}: {e}")));
+    eprintln!("{:?}: {}x{} written to {file}", window, picture.width, picture.height);
+    crate::leave(0);
+}
+
 pub fn run(pid: u32, o: &Opts, reading: bool) {
     let hub = web::Hub::default();
     if o.web {
-        match hub.serve(o.port) {
-            Ok(()) => eprintln!("page for Yomitan: http://127.0.0.1:{}", o.port),
-            Err(e) => die(&format!("cannot serve on port {}: {e}", o.port)),
-        }
+        crate::serve(&hub, o);
     }
     let control = Arc::new(Control::default());
     if o.overlay {
@@ -311,7 +336,7 @@ pub fn run(pid: u32, o: &Opts, reading: bool) {
         thread::sleep(Duration::from_millis(500));
         if !o.overlay && !control.on() {
             // without an overlay nothing can start the reader again
-            std::process::exit(1);
+            crate::leave(1);
         }
     }
     die("target process is gone");

@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 
 use crate::screen::{self, by_process, X11};
 use crate::translate::{self, Service};
-use crate::{doctor, engines, explain, install, mem, ocr};
+use crate::{doctor, engines, explain, install, mem, ocr, tray};
 
 const TICK: Duration = Duration::from_millis(200);
 /// Ticks between two looks at the windows on screen.
@@ -76,25 +76,23 @@ impl Options {
             args.extend(["--translate", "--to", &self.to, "--via", self.via.known().id].map(str::to_string));
         }
         if self.web {
-            args.push("--web".to_string());
+            args.extend(["--web", "--open"].map(str::to_string));
         }
         args
     }
 }
 
-/// What a game is read with unless the reader says otherwise: for one who
-/// has no key to translate with, and has not chosen a service of their own
-/// (`chosen`), translated by Google, which needs none.
-fn fresh_for(chosen: Option<Service>, any_key: bool) -> Options {
-    if !any_key && chosen != Some(Service::Local) {
-        return Options { translate: true, to: "vi".to_string(), via: Service::Google, web: false };
-    }
-    Options { translate: false, to: "vi".to_string(), via: chosen.unwrap_or(Service::Gemini), web: false }
+/// What a game is read with unless the reader says otherwise: translated,
+/// by the service the reader has chosen if it can be used (`chosen` says
+/// which, and whether it has what it needs), else by Google, which needs
+/// no key.
+fn fresh_for(chosen: Option<(Service, bool)>) -> Options {
+    let via = chosen.filter(|c| c.1).map_or(Service::Google, |c| c.0);
+    Options { translate: true, to: "vi".to_string(), via, web: false }
 }
 
 fn fresh() -> Options {
-    let any_key = translate::SERVICES.iter().any(|k| k.service.keyed() && !translate::setup(k.service).key.is_empty());
-    fresh_for(translate::explicit(), any_key)
+    fresh_for(translate::explicit().map(|service| (service, !service.keyed() || !translate::setup(service).key.is_empty())))
 }
 
 /// The file of options: a JSON object with the options of each game, by the
@@ -137,8 +135,8 @@ impl Kind {
     fn said(&self) -> String {
         match self {
             Kind::Looking => "đang nhận…".to_string(),
-            Kind::Profile(engine) => engine.clone(),
-            Kind::Unknown => "chưa có profile".to_string(),
+            Kind::Profile(engine) => format!("{engine} · trích text trực tiếp từ game"),
+            Kind::Unknown => "chưa hỗ trợ trực tiếp · đọc bằng OCR".to_string(),
             Kind::Failed(e) => e.clone(),
         }
     }
@@ -215,6 +213,13 @@ struct Launcher {
     /// the options are being put into the widgets, not chosen
     loading: Cell<bool>,
     ticks: Cell<u32>,
+    /// the icon in the tray, where the desktop has a tray
+    tray: Option<ksni::blocking::Handle<tray::Tray>>,
+    /// what the reader asks for through the tray
+    asked: Receiver<tray::Asked>,
+    /// the process that reads a game now
+    reader: Cell<Option<u32>>,
+    main: glib::MainLoop,
 }
 
 fn label(text: &str, classes: &[&str]) -> gtk4::Label {
@@ -260,14 +265,14 @@ impl Launcher {
         let mut windows = self.screen.windows();
         windows.extend(screen::wayland_windows(&self.wayland.borrow()));
         let now = by_process(windows, std::process::id());
-        self.rows.borrow_mut().retain(|row| {
-            let there = now.iter().any(|w| w.pid == row.pid);
-            if !there {
-                self.list.remove(&row.row);
-                self.kinds.borrow_mut().remove(&row.pid);
-            }
-            there
-        });
+        // Taking a row off the list selects another, which has the options
+        // shown and so the rows read: they must not be held while it happens.
+        let (kept, gone): (Vec<Row>, Vec<Row>) = self.rows.take().into_iter().partition(|row| now.iter().any(|w| w.pid == row.pid));
+        *self.rows.borrow_mut() = kept;
+        for row in gone {
+            self.kinds.borrow_mut().remove(&row.pid);
+            self.list.remove(&row.row);
+        }
         for window in &now {
             let known = self.rows.borrow().iter().any(|r| r.pid == window.pid);
             if !known {
@@ -330,6 +335,19 @@ impl Launcher {
                 Err(e) => self.status.set_text(&e),
             }
             self.check();
+        }
+        let asked: Vec<tray::Asked> = self.asked.try_iter().collect();
+        for asked in asked {
+            match asked {
+                tray::Asked::Show => self.window.present(),
+                // the reader ends as if it were closed, and the window comes back when it has
+                tray::Asked::Stop => {
+                    if let Some(pid) = self.reader.get() {
+                        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                    }
+                }
+                tray::Asked::Quit => self.main.quit(),
+            }
         }
         let ended: Vec<Exit> = self.ended.1.try_iter().collect();
         for exit in ended {
@@ -429,9 +447,9 @@ impl Launcher {
         self.options.set_sensitive(true);
         let kind = self.kind_of(row.pid);
         let (text, note) = match &kind {
-            Kind::Profile(_) => ("Đọc game này", None),
+            Kind::Profile(_) => ("Đọc game này", Some("Game này được hỗ trợ trực tiếp: tool trích text thẳng từ game, đúng từng chữ và có tên người nói, không cần OCR.")),
             Kind::Looking => ("Đang nhận engine…", None),
-            _ => ("Đọc bằng OCR", Some("Game này chưa có profile nên tool đọc khung thoại từ ảnh chụp. Cách này cần key Gemini (nhập ở bánh răng trên dải nổi), và lần đầu sẽ hỏi bạn khoanh khung thoại.")),
+            _ => ("Đọc bằng OCR", Some("Game này chưa được hỗ trợ trực tiếp nên tool đọc khung thoại từ ảnh chụp. Cách này cần key Gemini (nhập ở bánh răng trên dải nổi), và lần đầu sẽ hỏi bạn khoanh khung thoại.")),
         };
         self.start.set_label(text);
         self.start.set_sensitive(kind != Kind::Looking);
@@ -516,6 +534,7 @@ impl Launcher {
         };
         self.status.set_text("");
         self.window.set_visible(false);
+        self.reading(Some(child.id()));
         let ended = self.ended.0.clone();
         let output = child.stderr.take();
         thread::spawn(move || {
@@ -534,7 +553,16 @@ impl Launcher {
 
     /// The reading ended: the window comes back, and says why if it was not
     /// because the game was closed.
+    /// Keeps which process reads a game, and has the tray know whether one does.
+    fn reading(&self, reader: Option<u32>) {
+        self.reader.set(reader);
+        if let Some(tray) = &self.tray {
+            tray.update(|tray| tray.reading = reader.is_some());
+        }
+    }
+
     fn returned(self: &Rc<Self>, exit: Exit) {
+        self.reading(None);
         let alive = std::path::Path::new(&format!("/proc/{}", exit.pid)).exists();
         match exit.error.filter(|_| alive) {
             Some(error) => self.status.set_text(&format!("Phần đọc dừng lại. {}", explain::explain(&error).text)),
@@ -548,7 +576,7 @@ impl Launcher {
     }
 }
 
-fn build() -> Option<gtk4::Window> {
+fn build(main: glib::MainLoop, tray: Option<ksni::blocking::Handle<tray::Tray>>, asked: Receiver<tray::Asked>) -> Option<gtk4::Window> {
     let screen = match X11::open() {
         Ok(screen) => screen,
         Err(e) => {
@@ -584,7 +612,7 @@ fn build() -> Option<gtk4::Window> {
     options.append(&setting("Dịch", &translate_on));
     options.append(&setting("Dịch sang", &language));
     options.append(&setting("Dịch bằng", &service));
-    options.append(&setting("Trang web cho Yomitan (127.0.0.1:8777)", &web));
+    options.append(&setting("Mở trong trình duyệt", &web));
     page.append(&options);
 
     let start = gtk4::Button::with_label("Đọc game này");
@@ -623,6 +651,10 @@ fn build() -> Option<gtk4::Window> {
         status: status.clone(),
         loading: Cell::new(false),
         ticks: Cell::new(0),
+        tray,
+        asked,
+        reader: Cell::new(None),
+        main,
     });
     launcher.services();
     let (kept, shown) = (launcher.clone(), launcher.clone());
@@ -672,14 +704,27 @@ pub fn run() {
         eprintln!("{e}");
         return;
     }
-    let Some(window) = build() else { return };
     let main = glib::MainLoop::new(None, false);
+    let (tell, asked) = mpsc::channel();
+    let Some(_first) = tray::only(tell.clone()) else {
+        eprintln!("vntext is running already: its window was asked to show");
+        return;
+    };
+    let tray = tray::start(tell);
+    // with an icon in the tray, closing the window only puts it away: the icon brings it back and has the way out
+    let stays = tray.is_some();
+    let Some(window) = build(main.clone(), tray, asked) else { return };
     let closing = main.clone();
-    window.connect_close_request(move |_| {
+    window.connect_close_request(move |window| {
+        if stays {
+            window.set_visible(false);
+            return glib::Propagation::Stop;
+        }
         closing.quit();
         glib::Propagation::Proceed
     });
     main.run();
+    crate::kwin::cleanup();
 }
 
 #[cfg(test)]
@@ -693,7 +738,7 @@ mod tests {
         assert_eq!(options.command(42, false)[0], "ocr");
         options.translate = true;
         options.web = true;
-        assert_eq!(options.command(7, true), ["auto", "7", "--overlay", "--translate", "--to", "vi", "--via", "google", "--web"]);
+        assert_eq!(options.command(7, true), ["auto", "7", "--overlay", "--translate", "--to", "vi", "--via", "google", "--web", "--open"]);
     }
 
     #[test]
@@ -709,13 +754,12 @@ mod tests {
     #[test]
     fn those_with_no_key_translate_with_google() {
         let google = Options { translate: true, to: "vi".to_string(), via: Service::Google, web: false };
-        assert_eq!(fresh_for(None, false), google);
-        // one who set up a service without a key is no different
-        assert_eq!(fresh_for(Some(Service::Claude), false), google);
-        // one who has a key, or runs a server of their own, is left as they were
-        assert_eq!(fresh_for(Some(Service::Claude), true), Options { translate: false, to: "vi".to_string(), via: Service::Claude, web: false });
-        assert_eq!(fresh_for(None, true).via, Service::Gemini);
-        assert_eq!(fresh_for(Some(Service::Local), false), Options { translate: false, to: "vi".to_string(), via: Service::Local, web: false });
+        // one who has chosen nothing, whatever keys there are
+        assert_eq!(fresh_for(None), google);
+        // one who chose a service that lacks its key is no different
+        assert_eq!(fresh_for(Some((Service::Claude, false))), google);
+        // one who chose a service that can be used has it
+        assert_eq!(fresh_for(Some((Service::Claude, true))), Options { translate: true, to: "vi".to_string(), via: Service::Claude, web: false });
     }
 
     #[test]
@@ -728,7 +772,7 @@ mod tests {
     #[test]
     fn engines_are_said() {
         assert_eq!(Kind::Looking.said(), "đang nhận…");
-        assert_eq!(Kind::Profile("Escude".to_string()).said(), "Escude");
-        assert_eq!(Kind::Unknown.said(), "chưa có profile");
+        assert_eq!(Kind::Profile("Escude".to_string()).said(), "Escude · trích text trực tiếp từ game");
+        assert_eq!(Kind::Unknown.said(), "chưa hỗ trợ trực tiếp · đọc bằng OCR");
     }
 }

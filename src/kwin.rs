@@ -68,6 +68,18 @@ pub fn capture(conn: &Connection, handle: Option<&str>) -> Result<Shot, String> 
 }
 
 
+/// Whether KWin lets this program take pictures of windows: `Err` with
+/// KWin's words if it refuses. Asked by taking one of the window that has
+/// the focus, which is thrown away.
+pub fn allowed() -> Result<(), String> {
+    let conn = Connection::session().map_err(|e| e.to_string())?;
+    match capture(&conn, None) {
+        Err(e) if crate::explain::not_authorized(&e) => Err(e),
+        // anything else, as no window having the focus, is not a refusal
+        _ => Ok(()),
+    }
+}
+
 /// How the program that runs in KWin tells of the windows: it calls the
 /// methods of this object, which keeps what it is told.
 const PATH: &str = "/org/vntext/Kwin";
@@ -279,8 +291,13 @@ extern "C" fn signalled(signal: libc::c_int) {
     unsafe { libc::write(fd, &byte as *const u8 as *const libc::c_void, 1) };
 }
 
+/// The last chance to unload the script. Whatever has ended the program
+/// should have called `cleanup` already: by now the thread has lost what
+/// much of the standard library needs, so the attempt may fail, and it must
+/// not take the program down with it. A script left behind is unloaded by
+/// the next run.
 extern "C" fn at_exit() {
-    cleanup();
+    let _ = std::panic::catch_unwind(cleanup);
 }
 
 /// Has the script unloaded however the program ends: by returning, by

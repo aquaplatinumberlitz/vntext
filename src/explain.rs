@@ -47,6 +47,8 @@ pub fn explain(raw: &str) -> Explained {
         ("Dịch vụ dịch báo đã hết hạn mức (quá nhiều yêu cầu). Đợi một lúc, hoặc dịch bằng Google, không cần key.", Some(Action::Google))
     } else if has(&["401", "403", "unauthorized", "forbidden", "api key", "api_key", "permission_denied", "invalid_api"]) && !has(&["os error 13"]) {
         ("Key của dịch vụ dịch không đúng hoặc đã hết hiệu lực. Nhập lại key ở thiết lập dịch.", Some(Action::Translate))
+    } else if has(&["http 404", "not_found", "is not found for api version"]) {
+        ("Dịch vụ dịch không có model đang ghi trong thiết lập (có thể model đã bị gỡ). Mở tab Dịch, chọn model khác bằng nút Danh sách; với Gemini, để trống ô model thì tool tự chọn Flash-Lite mới nhất.", Some(Action::Translate))
     } else if has(&["no key", "needs its api key", "name a model", "chưa có api key"]) {
         ("Dịch vụ dịch đã chọn chưa có key hoặc chưa ghi tên model. Thiết lập ở tab Dịch.", Some(Action::Translate))
     } else if has(&["timed out", "timeout", "dns", "connection", "network", "error sending request", "unreachable", "resolve"]) && !has(&["127.0.0.1:19633", "yomitan"]) {
@@ -122,6 +124,9 @@ mod tests {
     fn the_game_and_the_system() {
         assert!(said("the game has no X11 window").1.contains("cửa sổ của game"));
         assert!(said("OCR: the game has no window that can be pictured").1.contains("cửa sổ của game"));
+        // a model that is no longer there
+        let gone = said("OCR: HTTP 404");
+        assert!(gone.0 == Some(Action::Translate) && gone.1.contains("model"));
         // KWin's refusal is not taken for a wrong key
         let refused = said("screenshot: org.kde.KWin.ScreenShot2.Error.NoAuthorized: The process is not authorized to take a screenshot");
         assert!(refused.0.is_none() && refused.1.contains("Thêm vào menu ứng dụng"));

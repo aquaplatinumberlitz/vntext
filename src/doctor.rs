@@ -37,6 +37,9 @@ pub struct Env {
     pub wayland_game: bool,
     /// the processes that have that driver loaded
     pub wayland_pids: Vec<u32>,
+    /// on KDE, whether KWin lets this program take pictures of windows,
+    /// which reading a Wayland window's text box takes
+    pub pictures: Option<bool>,
     pub wl_copy: bool,
     pub dictionaries: bool,
     pub yomitan: bool,
@@ -94,7 +97,20 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let lookup = Check::new("Tra từ", env.dictionaries || env.yomitan, said, "Mở hộp cài đặt (bánh răng trên dải nổi), tab \"Từ điển\": tải một từ điển của Yomitan rồi thêm vào. Hoặc bật Yomitan API trong Firefox (xem README).");
     let said = if env.keys.is_empty() { "Chưa có key nào; tool dịch bằng Google Dịch, không cần key.".to_string() } else { format!("Có key của: {}.", env.keys.join(", ")) };
     let translating = Check::new("Dịch", true, &said, "");
-    vec![strip, x, memory, window, copy, lookup, translating]
+    let mut all = vec![strip, x, memory, window];
+    // only a game with a Wayland window is read through KWin's pictures
+    match env.pictures {
+        Some(true) => all.push(Check::new("Chụp cửa sổ qua KWin", true, "KWin cho vntext chụp cửa sổ, nên OCR đọc được cả cửa sổ Wayland.", "")),
+        Some(false) => all.push(Check::new(
+            "Chụp cửa sổ qua KWin",
+            !env.wayland_game,
+            "KWin chưa cho vntext chụp cửa sổ. Việc này chỉ cần cho OCR trên game chạy bằng Wayland driver của Wine.",
+            "Bấm \"Thêm vào menu ứng dụng\" trong cửa sổ chọn game (hoặc chạy: vntext install), rồi mở lại vntext.",
+        )),
+        None => {}
+    }
+    all.extend([copy, lookup, translating]);
+    all
 }
 
 /// Finds out about this machine. `layer_shell` is the toolkit's answer, which
@@ -110,6 +126,7 @@ pub fn gather(layer_shell: bool) -> Env {
         ptrace: std::fs::read_to_string(PTRACE).ok(),
         wayland_game: !wayland.is_empty(),
         wayland_pids: wayland,
+        pictures: std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("kde"))).then(|| crate::kwin::allowed().is_ok()),
         wl_copy: on_path("wl-copy"),
         dictionaries: Store::open().is_ok_and(|store| store.ready()),
         yomitan: yomitan::lookup("あ").is_ok(),
@@ -170,7 +187,7 @@ mod tests {
     use super::*;
 
     fn fine() -> Env {
-        Env { session: Some("wayland".to_string()), desktop: "KDE".to_string(), layer_shell: true, x_server: true, ptrace: Some("0\n".to_string()), wayland_game: false, wayland_pids: Vec::new(), wl_copy: true, dictionaries: true, yomitan: false, keys: Vec::new() }
+        Env { session: Some("wayland".to_string()), desktop: "KDE".to_string(), layer_shell: true, x_server: true, ptrace: Some("0\n".to_string()), wayland_game: false, wayland_pids: Vec::new(), pictures: None, wl_copy: true, dictionaries: true, yomitan: false, keys: Vec::new() }
     }
 
     fn failing(env: &Env) -> Vec<&'static str> {
@@ -227,6 +244,15 @@ mod tests {
         assert!(!window.ok && window.fix.contains("Wayland driver"));
         assert_eq!(failing(&elsewhere), ["Cửa sổ game Wayland"]);
         assert!(checks(&fine())[3].ok);
+    }
+
+    #[test]
+    fn pictures_matter_for_wayland_games_only() {
+        let refused = Env { pictures: Some(false), ..fine() };
+        assert!(failing(&refused).is_empty());
+        let needed = Env { pictures: Some(false), wayland_game: true, ..fine() };
+        assert_eq!(failing(&needed), ["Chụp cửa sổ qua KWin"]);
+        assert!(failing(&Env { pictures: Some(true), wayland_game: true, ..fine() }).is_empty());
     }
 
     #[test]

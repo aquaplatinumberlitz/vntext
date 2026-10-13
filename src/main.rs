@@ -10,6 +10,7 @@ mod ocr;
 mod overlay;
 mod screen;
 mod text;
+mod tray;
 mod translate;
 mod web;
 mod yomitan;
@@ -41,6 +42,7 @@ for looking into a game that has no profile yet:
   vntext strings <pid|name> [--min N] [--all]            dump every Japanese string in memory
   vntext find    <pid|name> <text> [--all]               locate a known string
   vntext watch   <pid|name> <hex addr> <utf8|utf16|sjis> [--clip]
+  vntext shot    <pid|name> <file.png>                   write the text box as ocr would send it
 
   --min N   minimum characters per string (default 4)
   --all     also scan read-only memory
@@ -51,6 +53,7 @@ auto and ocr also take:
   --raw          print text as the engine stores it, control codes included
   --debug        log every change of the cells that hold a reading position
   --web          serve a live page for reading with Yomitan (http://127.0.0.1:8777)
+  --open         with --web: open the page in the browser
   --port N       port for --web
   --overlay      show each message, translated if --translate is given, in a strip by the game's window
   --translate    translate each message with the Gemini API (needs GEMINI_API_KEY)
@@ -80,6 +83,7 @@ struct Opts {
     to: String,
     model: Option<String>,
     web: bool,
+    open: bool,
     port: u16,
     debug: bool,
     pick: bool,
@@ -98,6 +102,7 @@ fn parse_args() -> Opts {
         to: "vi".to_string(),
         model: None,
         web: false,
+        open: false,
         port: 8777,
         debug: false,
         pick: false,
@@ -112,6 +117,7 @@ fn parse_args() -> Opts {
             "--raw" => o.raw = true,
             "--translate" => o.translate = true,
             "--web" => o.web = true,
+            "--open" => o.open = true,
             "--debug" => o.debug = true,
             "--pick" => o.pick = true,
             "--overlay" => o.overlay = true,
@@ -132,7 +138,28 @@ fn parse_args() -> Opts {
 
 fn die(msg: &str) -> ! {
     eprintln!("{msg}");
-    exit(1)
+    leave(1)
+}
+
+/// Serves the page for reading in a browser, and opens it there if asked.
+fn serve(hub: &web::Hub, o: &Opts) {
+    let page = format!("http://127.0.0.1:{}", o.port);
+    match hub.serve(o.port) {
+        Ok(()) => eprintln!("page for Yomitan: {page}"),
+        Err(e) => die(&format!("cannot serve on port {}: {e}", o.port)),
+    }
+    if o.open {
+        if let Err(e) = Command::new("xdg-open").arg(&page).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+            eprintln!("\x1b[33mcannot open {page} in a browser: {e}\x1b[0m");
+        }
+    }
+}
+
+/// Ends the program, taking out of KWin what was put there while that can
+/// still be done.
+fn leave(code: i32) -> ! {
+    kwin::cleanup();
+    exit(code)
 }
 
 fn open(target: &str) -> Proc {
@@ -166,6 +193,7 @@ fn main() {
             }
         }
         ["ocr", target] => ocr::run(mem::resolve(target).unwrap_or_else(|e| die(&e)), &o, true),
+        ["shot", target, file] => ocr::shot(mem::resolve(target).unwrap_or_else(|e| die(&e)), file),
         ["strings", target] => strings(open(target), cfg, &o),
         ["find", target, needle] => find(open(target), needle, &o),
         ["watch", target, addr, enc] => {
@@ -324,10 +352,7 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
     }
     let hub = web::Hub::default();
     if o.web {
-        match hub.serve(o.port) {
-            Ok(()) => eprintln!("page for Yomitan: http://127.0.0.1:{}", o.port),
-            Err(e) => die(&format!("cannot serve on port {}: {e}", o.port)),
-        }
+        serve(&hub, o);
     }
     // while the reader has the text box read from pictures, the profile keeps quiet
     let pictures = Arc::new(ocr::Control::default());

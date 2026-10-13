@@ -33,7 +33,7 @@ Type=Application
 Name=vntext
 Comment=Đọc và dịch text của visual novel
 Exec={}
-Icon=accessories-dictionary
+Icon=vntext
 Terminal=false
 Categories=Game;Utility;
 X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2
@@ -55,6 +55,8 @@ fn on_path(dir: &Path, var: &std::ffi::OsStr) -> bool {
 /// What `all` did.
 pub struct Installed {
     pub entry: PathBuf,
+    /// where the picture for the menu went; why it did not, if it could not
+    pub icon: Result<PathBuf, String>,
     /// where the command was linked, if `~/.local/bin` is on the path; why
     /// it was not, if it could not be
     pub link: Option<Result<PathBuf, String>>,
@@ -63,6 +65,10 @@ pub struct Installed {
 impl std::fmt::Display for Installed {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "wrote {}", self.entry.display())?;
+        match &self.icon {
+            Ok(icon) => write!(f, "\nwrote {}", icon.display())?,
+            Err(e) => write!(f, "\n{e}")?,
+        }
         match &self.link {
             Some(Ok(link)) => write!(f, "\nlinked {}", link.display()),
             Some(Err(e)) => write!(f, "\n{e}"),
@@ -94,7 +100,28 @@ pub fn all() -> Result<Installed, String> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     // a link that cannot be made does not undo the menu entry
     let link = bin.filter(|bin| on_path(bin, &path)).map(|bin| link(&exe, &bin));
-    Ok(Installed { entry, link })
+    // the entry names the picture; without it the menu shows a blank, no more
+    let icons = applications_dir().with_file_name("icons");
+    let icon = crate::tray::write_icon(&icons).map_err(|e| format!("cannot write the icon under {}: {e}", icons.display()));
+    refresh(&icons.join("hicolor"));
+    Ok(Installed { entry, icon, link })
+}
+
+/// Has the desktop notice the new picture and entry now, not at the next
+/// login: menus keep lists of the icons a theme had when they last looked.
+/// Each step is tried and none is needed, so what fails is let be.
+fn refresh(theme: &Path) {
+    use std::process::{Command, Stdio};
+    let quiet = |program: &str, args: &[&std::ffi::OsStr]| {
+        let _ = Command::new(program).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    };
+    // a list of the theme's icons that is there is believed over the files themselves
+    if theme.join("icon-theme.cache").exists() {
+        quiet("gtk-update-icon-cache", &["-f".as_ref(), "-t".as_ref(), theme.as_os_str()]);
+    }
+    // a theme that changed is known by the time of its directory
+    quiet("touch", &[theme.as_os_str()]);
+    quiet("kbuildsycoca6", &[]);
 }
 
 /// Writes the entry for the running program and returns where it went.

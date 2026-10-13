@@ -131,6 +131,19 @@ window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
 .vntext-ask entry image { color: #bbb; }
 .vntext-ask button { background: #e0a458; border: none; box-shadow: none; padding: 4px 16px; }
 .vntext-ask button label { color: black; font-size: 13px; }
+.vntext-ask button.icon image { color: white; }
+.vntext-ask .box dropdown button { background: #2c2c2c; border: 1px solid #555; padding: 2px 8px; }
+.vntext-ask .box dropdown button label, .vntext-ask .box dropdown button arrow { color: white; }
+.vntext-ask popover contents, .vntext-ask popover listview { background: #2c2c2c; }
+.vntext-ask .box popover label, .vntext-ask .box popover image { color: white; }
+.vntext-ask popover row:hover, .vntext-ask popover row:selected { background: #505050; }
+.vntext-ask switch { background: #555; }
+.vntext-ask switch:checked { background: #e0a458; }
+.vntext-ask scale trough { background: #555; }
+.vntext-ask scale highlight { background: #e0a458; }
+.vntext-ask progressbar trough { background: #555; }
+.vntext-ask progressbar progress { background: #e0a458; }
+.vntext-ask .box list label { color: #e8e8e8; }
 .vntext-pick label { color: white; font-size: 20px; background: rgba(0, 0, 0, 0.8); padding: 8px 16px; border-radius: 8px; }
 ";
 
@@ -440,6 +453,10 @@ struct Ui {
 
 struct Overlay {
     ui: RefCell<Ui>,
+    /// The settings are open. They take the keyboard from the game, which
+    /// must still count as the window being read: the strip stays for the
+    /// reader to see what is changed, and the text box can be picked.
+    asking: Cell<bool>,
     events: Receiver<String>,
     screen: Box<dyn Screen>,
     display: gdk::Display,
@@ -973,7 +990,7 @@ impl Overlay {
         }
         let mut ui = self.ui.borrow_mut();
         ui.game = ui.game.take().or_else(|| self.screen.window_of(self.pid));
-        ui.placed = ui.game.as_ref().and_then(|window| self.screen.placement(window)).filter(|_| self.screen.active_is(self.pid));
+        ui.placed = ui.game.as_ref().and_then(|window| self.screen.placement(window)).filter(|_| self.asking.get() || self.screen.active_is(self.pid));
         if ui.placed.is_none() && !ui.picking {
             // the window may have been closed and opened anew
             ui.game = None;
@@ -1229,14 +1246,6 @@ impl Overlay {
         let overlay = self.clone();
         reset.connect_clicked(move |_| overlay.restyle(|l| l.place = None));
         page.append(&reset);
-
-        // The strip has no window to close, and a reader who came by the
-        // launcher has no terminal to stop it from: this is the way back.
-        let stop = gtk4::Button::with_label("Dừng đọc game này");
-        stop.set_tooltip_text(Some("Tắt dải nổi; game vẫn chạy. Mở từ cửa sổ chọn game thì quay về đó."));
-        stop.set_halign(gtk4::Align::Start);
-        stop.connect_clicked(|_| std::process::exit(0));
-        page.append(&stop);
         page
     }
 
@@ -1459,15 +1468,28 @@ impl Overlay {
     /// saved is the one that translates from then on), and the dictionaries.
     fn set_up(self: &Rc<Self>, tab: Tab) {
         let Some((x, y, width, height)) = self.ui.borrow().placed else { return };
+        if self.asking.replace(true) {
+            return;
+        }
         let window = floating("vntext-ask");
+        let overlay = self.clone();
+        window.connect_destroy(move |_| overlay.asking.set(false));
         // typing needs the keyboard, which a floating surface otherwise never takes
         window.set_keyboard_mode(KeyboardMode::Exclusive);
         let content = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
-        let asked = gtk4::Label::new(Some("Nguồn dịch · Enter để lưu · Esc để huỷ"));
+        let tabs = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+        tabs.set_hexpand(true);
+        let close = pictured("window-close-symbolic", "Đóng (Esc)");
+        close.add_css_class("icon");
+        let closing = window.clone();
+        close.connect_clicked(move |_| closing.destroy());
+        let top = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        top.append(&tabs);
+        top.append(&close);
+        content.append(&top);
+        let asked = gtk4::Label::new(Some("Nguồn dịch · Enter để lưu · Esc để đóng"));
         asked.set_xalign(0.0);
         content.append(&asked);
-        let tabs = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
-        content.append(&tabs);
         // a row for each thing a service may want
         let row = |name: &str, entry: &gtk4::Widget| {
             let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
@@ -1815,6 +1837,7 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
         mode,
         mode_now,
         read,
+        asking: Cell::new(false),
     });
 
     overlay.acting(&overlay.hide, |o| {
@@ -1852,6 +1875,9 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
     buttons.append(&overlay.mode);
     buttons.append(&overlay.read);
     buttons.append(&overlay.button("emblem-system-symbolic", "Thiết lập: hiển thị, dịch, từ điển, OCR", |o| o.set_up(Tab::Display)));
+    // The strip has no window to close, and a reader who came by the
+    // launcher has no terminal to stop it from: this is the way back.
+    buttons.append(&overlay.button("window-close-symbolic", "Dừng đọc game này: tắt dải nổi, game vẫn chạy. Mở từ cửa sổ chọn game thì quay về đó.", |_| crate::leave(0)));
     let chooser = overlay.clone();
     overlay.service.connect_clicked(move |_| chooser.choose_service());
     let helped = overlay.clone();

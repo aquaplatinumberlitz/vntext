@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use x11rb::connection::Connection;
+use x11rb::protocol::res;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, ImageFormat, MapState, Window};
 use x11rb::rust_connection::RustConnection;
 
@@ -116,7 +117,7 @@ impl X11 {
         let ids: Vec<Window> = listed.value32().map(|ids| ids.collect()).unwrap_or_default();
         ids.into_iter()
             .filter_map(|window| {
-                let pid = self.number(window, b"_NET_WM_PID", AtomEnum::CARDINAL)?;
+                let pid = self.pid_of(window)?;
                 let (width, height) = self.size(window)?;
                 Some(Listed { window, pid, title: self.title(window), area: width as u32 * height as u32 })
             })
@@ -150,7 +151,7 @@ impl X11 {
                 let Some(tree) = self.conn.query_tree(window).ok().and_then(|c| c.reply().ok()) else { continue };
                 for child in tree.children {
                     next.push(child);
-                    if self.number(child, b"_NET_WM_PID", AtomEnum::CARDINAL) != Some(pid) {
+                    if self.pid_of(child) != Some(pid) {
                         continue;
                     }
                     let shown = self.conn.get_window_attributes(child).ok().and_then(|c| c.reply().ok());
@@ -173,10 +174,22 @@ impl X11 {
         number
     }
 
+    /// The process a window belongs to: the one the window names, or, for a
+    /// program that names none (Ryujinx is one), the one the X server knows
+    /// to be at the other end of the connection the window was made on.
+    fn pid_of(&self, window: Window) -> Option<u32> {
+        if let Some(pid) = self.number(window, b"_NET_WM_PID", AtomEnum::CARDINAL) {
+            return Some(pid);
+        }
+        let asked = [res::ClientIdSpec { client: window, mask: res::ClientIdMask::LOCAL_CLIENT_PID }];
+        let reply = res::query_client_ids(&self.conn, &asked).ok()?.reply().ok()?;
+        reply.ids.iter().find(|id| id.spec.mask.contains(res::ClientIdMask::LOCAL_CLIENT_PID)).and_then(|id| id.value.first().copied())
+    }
+
     /// The process whose window has the keyboard, if it is an X11 window.
     fn active_pid(&self) -> Option<u32> {
         let active = self.number(self.root, b"_NET_ACTIVE_WINDOW", AtomEnum::WINDOW).filter(|w| *w != 0)?;
-        self.number(active, b"_NET_WM_PID", AtomEnum::CARDINAL)
+        self.pid_of(active)
     }
 
     /// Where the window is on screen, as `x, y, width, height`; `None` while

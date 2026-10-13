@@ -16,6 +16,8 @@ const GEMINI: &str = "https://generativelanguage.googleapis.com/v1beta";
 const GOOGLE: &str = "https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=ja";
 /// Google turns away whoever does not look like a browser.
 const BROWSER: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0";
+/// How long a picture may take to be read.
+const READ_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
 const CLAUDE_VERSION: &str = "2023-06-01";
 /// Room for a reply: the translations of a dozen passages and, with models
 /// that think first, their thinking.
@@ -491,7 +493,8 @@ impl Client {
             },
         });
         let url = format!("{GEMINI}/models/{}:generateContent", self.model);
-        let mut response = ureq::post(&url).header("x-goog-api-key", &self.key).send_json(&body).map_err(api_error)?;
+        // without a limit a request that is never answered would stop the reading for good, and silently
+        let mut response = ureq::post(&url).config().timeout_global(Some(READ_WITHIN)).build().header("x-goog-api-key", &self.key).send_json(&body).map_err(api_error)?;
         let reply: Value = response.body_mut().read_json().map_err(|e| e.to_string())?;
         parse_shown(&reply)
     }
@@ -519,6 +522,18 @@ fn parse_shown(reply: &Value) -> Result<Shown, String> {
     let shown: Value = serde_json::from_str(reply_text(reply)?).map_err(|e| format!("reply is not JSON: {e}"))?;
     let field = |name: &str| shown[name].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     Ok(Shown { speaker: field("speaker"), text: field("text").unwrap_or_default(), translation: field("translation") })
+}
+
+impl Client {
+    /// Has Gemini asked with its newest Flash-Lite from here on, for when
+    /// the model that was set up is no longer there. Gives the model's name.
+    pub fn renew(&mut self) -> Result<String, String> {
+        if self.service != Service::Gemini {
+            return Err("only Gemini's model is chosen by the tool".to_string());
+        }
+        self.model = newest_flash_lite(&self.key)?;
+        Ok(self.model.clone())
+    }
 }
 
 /// Model ids change every few months, so ask the API which Flash-Lite models
