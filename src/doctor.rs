@@ -4,7 +4,7 @@
 use std::process::Command;
 
 use crate::dict::store::Store;
-use crate::screen::Screen;
+use crate::screen::X11;
 use crate::{translate, yomitan};
 
 /// The setting of the kernel that lets a program read the memory of another.
@@ -33,6 +33,8 @@ pub struct Env {
     pub x_server: bool,
     /// what `/proc/sys/kernel/yama/ptrace_scope` holds, if it is there
     pub ptrace: Option<String>,
+    /// a game is running with Wine's Wayland driver, so its window is not an X11 one
+    pub wayland_game: bool,
     pub wl_copy: bool,
     pub dictionaries: bool,
     pub yomitan: bool,
@@ -72,6 +74,14 @@ pub fn checks(env: &Env) -> Vec<Check> {
             memory
         }
     };
+    let kde = env.desktop.split(':').any(|d| d.eq_ignore_ascii_case("kde"));
+    let window = if env.wayland_game && !kde {
+        Check::new("Cửa sổ game Wayland", false, "Có game Wine đang chạy bằng Wayland driver, mà tool chỉ hỏi được cửa sổ Wayland qua KWin, nên ngoài KDE chưa hỗ trợ.", "Tắt Wayland driver của Wine cho game đó (Faugus: bỏ tuỳ chọn Wayland) để nó chạy qua XWayland.")
+    } else if env.wayland_game {
+        Check::new("Cửa sổ game Wayland", true, "Có game Wine chạy bằng Wayland driver; tool hỏi KWin về cửa sổ của nó.", "")
+    } else {
+        Check::new("Cửa sổ game Wayland", true, "Không thấy game nào chạy bằng Wayland driver của Wine.", "")
+    };
     let copy = Check::new("Nút chép (wl-copy)", env.wl_copy, if env.wl_copy { "Có wl-copy để chép câu vào clipboard." } else { "Không có wl-copy nên nút chép và chép chữ đã chọn không chạy." }, "Cài gói wl-clipboard (Arch: sudo pacman -S wl-clipboard; Debian/Ubuntu: sudo apt install wl-clipboard).");
     let said = match (env.dictionaries, env.yomitan) {
         (true, true) => "Có từ điển đã nhập, và Yomitan cũng trả lời.",
@@ -82,7 +92,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     let lookup = Check::new("Tra từ", env.dictionaries || env.yomitan, said, "Mở hộp cài đặt (bánh răng trên dải nổi), tab \"Từ điển\": tải một từ điển của Yomitan rồi thêm vào. Hoặc bật Yomitan API trong Firefox (xem README).");
     let said = if env.keys.is_empty() { "Chưa có key nào; tool dịch bằng Google Dịch, không cần key.".to_string() } else { format!("Có key của: {}.", env.keys.join(", ")) };
     let translating = Check::new("Dịch", true, &said, "");
-    vec![strip, x, memory, copy, lookup, translating]
+    vec![strip, x, memory, window, copy, lookup, translating]
 }
 
 /// Finds out about this machine. `layer_shell` is the toolkit's answer, which
@@ -93,13 +103,21 @@ pub fn gather(layer_shell: bool) -> Env {
         session: std::env::var("XDG_SESSION_TYPE").ok(),
         desktop: std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(),
         layer_shell,
-        x_server: Screen::open().is_ok(),
+        x_server: X11::open().is_ok(),
         ptrace: std::fs::read_to_string(PTRACE).ok(),
+        wayland_game: wine_on_wayland(),
         wl_copy: on_path("wl-copy"),
         dictionaries: Store::open().is_ok_and(|store| store.ready()),
         yomitan: yomitan::lookup("あ").is_ok(),
         keys,
     }
+}
+
+/// Whether a process of this user has Wine's Wayland driver loaded, which
+/// is what makes a game's window a Wayland one.
+fn wine_on_wayland() -> bool {
+    let Ok(procs) = std::fs::read_dir("/proc") else { return false };
+    procs.flatten().filter(|e| e.file_name().to_string_lossy().bytes().all(|b| b.is_ascii_digit())).any(|e| std::fs::read_to_string(e.path().join("maps")).is_ok_and(|maps| maps.contains("winewayland.drv")))
 }
 
 /// Whether a program of that name is in one of the directories of `PATH`.
@@ -147,7 +165,7 @@ mod tests {
     use super::*;
 
     fn fine() -> Env {
-        Env { session: Some("wayland".to_string()), desktop: "KDE".to_string(), layer_shell: true, x_server: true, ptrace: Some("0\n".to_string()), wl_copy: true, dictionaries: true, yomitan: false, keys: Vec::new() }
+        Env { session: Some("wayland".to_string()), desktop: "KDE".to_string(), layer_shell: true, x_server: true, ptrace: Some("0\n".to_string()), wayland_game: false, wl_copy: true, dictionaries: true, yomitan: false, keys: Vec::new() }
     }
 
     fn failing(env: &Env) -> Vec<&'static str> {
@@ -196,10 +214,21 @@ mod tests {
     }
 
     #[test]
+    fn wayland_games_need_kwin() {
+        let on_kde = Env { wayland_game: true, ..fine() };
+        assert!(checks(&on_kde)[3].ok && checks(&on_kde)[3].said.contains("KWin"));
+        let elsewhere = Env { wayland_game: true, desktop: "sway".to_string(), ..fine() };
+        let window = &checks(&elsewhere)[3];
+        assert!(!window.ok && window.fix.contains("Wayland driver"));
+        assert_eq!(failing(&elsewhere), ["Cửa sổ game Wayland"]);
+        assert!(checks(&fine())[3].ok);
+    }
+
+    #[test]
     fn translating_never_fails_for_want_of_a_key() {
-        assert!(checks(&fine())[5].said.contains("Google"));
+        assert!(checks(&fine())[6].said.contains("Google"));
         let keyed = Env { keys: vec!["Gemini", "Claude"], ..fine() };
-        assert!(checks(&keyed)[5].ok && checks(&keyed)[5].said.contains("Gemini, Claude"));
+        assert!(checks(&keyed)[6].ok && checks(&keyed)[6].said.contains("Gemini, Claude"));
     }
 
     #[test]

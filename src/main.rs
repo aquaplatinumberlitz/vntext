@@ -3,6 +3,7 @@ mod doctor;
 mod engines;
 mod explain;
 mod install;
+mod kwin;
 mod launcher;
 mod mem;
 mod ocr;

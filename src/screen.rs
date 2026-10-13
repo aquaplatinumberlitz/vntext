@@ -1,9 +1,17 @@
-//! Pictures of a part of a game's window, taken through X11 and made as
-//! small as they can be while their text stays readable.
+//! Where a game's window is and pictures of a part of it, made as small as
+//! they can be while their text stays readable. An X11 window is asked of
+//! the X server; a window of another kind (a Wayland window) is asked of
+//! KWin, the only compositor that is asked here.
+
+use std::cell::{Cell, OnceCell};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, ImageFormat, MapState, Window};
 use x11rb::rust_connection::RustConnection;
+
+use crate::kwin::{self, Kwin};
 
 /// Shades of grey kept: what four bits a pixel hold.
 const SHADES: u32 = 16;
@@ -12,7 +20,39 @@ const MAX_WIDTH: usize = 1024;
 /// How deep below the root a game's own window is looked for.
 const DEPTH: u32 = 3;
 
-pub struct Screen {
+/// A window, by the number the X server or KWin gives it.
+#[derive(Clone, PartialEq, Debug)]
+pub enum WindowId {
+    X11(Window),
+    Kwin(String),
+}
+
+/// What is asked of the desktop about a game's window.
+pub trait Screen {
+    /// The largest window on screen that belongs to the process.
+    fn window_of(&self, pid: u32) -> Option<WindowId>;
+    /// Where the window is on screen, as `x, y, width, height`; `None` while
+    /// it is not shown.
+    fn placement(&self, window: &WindowId) -> Option<(i32, i32, i32, i32)>;
+    /// Whether the window that has the keyboard is one of the process.
+    fn active_is(&self, pid: u32) -> bool;
+    /// Where the pointer is in the window, in fractions of its size; `None`
+    /// where that cannot be told.
+    fn pointer(&self, window: &WindowId) -> Option<(f64, f64)>;
+    /// The region of the window as it looks now. `None` while the window
+    /// cannot be read, as when it is minimised.
+    fn grab(&self, window: &WindowId, region: Region) -> Option<Picture>;
+    /// How often the window is looked at for the text box to be read.
+    fn interval(&self, _: &WindowId) -> Duration {
+        Duration::from_millis(150)
+    }
+}
+
+/// How long a game is looked for among the X11 windows before KWin is
+/// asked, so that a game with an X11 window never has KWin meddle.
+const X11_FIRST: Duration = Duration::from_secs(2);
+
+pub struct X11 {
     conn: RustConnection,
     root: Window,
 }
@@ -57,11 +97,11 @@ pub fn by_process(windows: Vec<Listed>, me: u32) -> Vec<Listed> {
     kept
 }
 
-impl Screen {
-    pub fn open() -> Result<Screen, String> {
+impl X11 {
+    pub fn open() -> Result<X11, String> {
         let (conn, screen) = x11rb::connect(None).map_err(|e| format!("cannot reach the X server: {e}"))?;
         let root = conn.setup().roots[screen].root;
-        Ok(Screen { conn, root })
+        Ok(X11 { conn, root })
     }
 
     /// The windows the window manager lists, with the process each belongs to.
@@ -97,7 +137,7 @@ impl Screen {
     }
 
     /// The largest window on screen that belongs to the process.
-    pub fn window_of(&self, pid: u32) -> Option<Window> {
+    fn window_of_pid(&self, pid: u32) -> Option<Window> {
         let mut best: Option<(u32, Window)> = None;
         let mut level = vec![self.root];
         for _ in 0..DEPTH {
@@ -130,14 +170,14 @@ impl Screen {
     }
 
     /// The process whose window has the keyboard, if it is an X11 window.
-    pub fn active_pid(&self) -> Option<u32> {
+    fn active_pid(&self) -> Option<u32> {
         let active = self.number(self.root, b"_NET_ACTIVE_WINDOW", AtomEnum::WINDOW).filter(|w| *w != 0)?;
         self.number(active, b"_NET_WM_PID", AtomEnum::CARDINAL)
     }
 
     /// Where the window is on screen, as `x, y, width, height`; `None` while
     /// it is not shown.
-    pub fn placement(&self, window: Window) -> Option<(i32, i32, i32, i32)> {
+    fn placement_of(&self, window: Window) -> Option<(i32, i32, i32, i32)> {
         let shown = self.conn.get_window_attributes(window).ok()?.reply().ok()?;
         if shown.map_state != MapState::VIEWABLE {
             return None;
@@ -153,7 +193,7 @@ impl Screen {
     }
 
     /// Where the pointer is in the window, in fractions of its size.
-    pub fn pointer(&self, window: Window) -> Option<(f64, f64)> {
+    fn pointer_in(&self, window: Window) -> Option<(f64, f64)> {
         let pointer = self.conn.query_pointer(window).ok()?.reply().ok()?;
         let (width, height) = self.size(window)?;
         let (x, y) = (pointer.win_x as f64 / width as f64, pointer.win_y as f64 / height as f64);
@@ -162,7 +202,7 @@ impl Screen {
 
     /// The region of the window as it looks now. `None` while the window
     /// cannot be read, as when it is minimised.
-    pub fn grab(&self, window: Window, region: Region) -> Option<Picture> {
+    fn grab_from(&self, window: Window, region: Region) -> Option<Picture> {
         let (width, height) = self.size(window)?;
         let (x, y) = ((region.left * width as f64) as i16, (region.top * height as f64) as i16);
         let w = ((region.right - region.left) * width as f64) as u16;
@@ -181,10 +221,174 @@ impl Screen {
     }
 }
 
+impl Screen for X11 {
+    fn window_of(&self, pid: u32) -> Option<WindowId> {
+        self.window_of_pid(pid).map(WindowId::X11)
+    }
+
+    fn placement(&self, window: &WindowId) -> Option<(i32, i32, i32, i32)> {
+        match window {
+            WindowId::X11(window) => self.placement_of(*window),
+            WindowId::Kwin(_) => None,
+        }
+    }
+
+    fn active_is(&self, pid: u32) -> bool {
+        self.active_pid() == Some(pid)
+    }
+
+    fn pointer(&self, window: &WindowId) -> Option<(f64, f64)> {
+        match window {
+            WindowId::X11(window) => self.pointer_in(*window),
+            WindowId::Kwin(_) => None,
+        }
+    }
+
+    fn grab(&self, window: &WindowId, region: Region) -> Option<Picture> {
+        match window {
+            WindowId::X11(window) => self.grab_from(*window, region),
+            WindowId::Kwin(_) => None,
+        }
+    }
+}
+
+/// Windows as KWin tells of them.
+struct KwinScreen(Arc<Kwin>);
+
+impl Screen for KwinScreen {
+    fn window_of(&self, pid: u32) -> Option<WindowId> {
+        self.0.window_of(pid).map(WindowId::Kwin)
+    }
+
+    fn placement(&self, window: &WindowId) -> Option<(i32, i32, i32, i32)> {
+        match window {
+            WindowId::Kwin(id) => self.0.placement(id),
+            WindowId::X11(_) => None,
+        }
+    }
+
+    fn active_is(&self, pid: u32) -> bool {
+        self.0.active_is(pid)
+    }
+
+    /// KWin does not say where the pointer is.
+    fn pointer(&self, _: &WindowId) -> Option<(f64, f64)> {
+        None
+    }
+
+    fn grab(&self, window: &WindowId, region: Region) -> Option<Picture> {
+        match window {
+            WindowId::Kwin(id) => self.0.grab(id, region),
+            WindowId::X11(_) => None,
+        }
+    }
+
+    fn interval(&self, _: &WindowId) -> Duration {
+        kwin::INTERVAL
+    }
+}
+
+/// X11 windows first. A window that is not found there is asked of KWin,
+/// once the X11 windows have been looked through for a while.
+struct Both {
+    x11: X11,
+    kwin: OnceCell<Option<KwinScreen>>,
+    /// since when no X11 window of the game has been found
+    missing: Cell<Option<Instant>>,
+}
+
+impl Both {
+    /// KWin's side, started the first time it is wanted.
+    fn kwin(&self) -> Option<&KwinScreen> {
+        self.kwin
+            .get_or_init(|| match Kwin::shared() {
+                Ok(kwin) => Some(KwinScreen(kwin)),
+                Err(e) => {
+                    eprintln!("\x1b[33mno window of this game on X11, and KWin cannot be asked: {e}\x1b[0m");
+                    None
+                }
+            })
+            .as_ref()
+    }
+
+    /// KWin's side, if it was ever started: a window of KWin's is known only then.
+    fn started(&self) -> Option<&KwinScreen> {
+        self.kwin.get().and_then(Option::as_ref)
+    }
+}
+
+impl Screen for Both {
+    fn window_of(&self, pid: u32) -> Option<WindowId> {
+        if let Some(window) = self.x11.window_of(pid) {
+            self.missing.set(None);
+            return Some(window);
+        }
+        let since = self.missing.get().unwrap_or_else(|| {
+            let now = Instant::now();
+            self.missing.set(Some(now));
+            now
+        });
+        if since.elapsed() < X11_FIRST {
+            return None;
+        }
+        self.kwin()?.window_of(pid)
+    }
+
+    fn placement(&self, window: &WindowId) -> Option<(i32, i32, i32, i32)> {
+        match window {
+            WindowId::X11(_) => self.x11.placement(window),
+            WindowId::Kwin(_) => self.started()?.placement(window),
+        }
+    }
+
+    fn active_is(&self, pid: u32) -> bool {
+        self.x11.active_is(pid) || self.started().is_some_and(|k| k.active_is(pid))
+    }
+
+    fn pointer(&self, window: &WindowId) -> Option<(f64, f64)> {
+        self.x11.pointer(window)
+    }
+
+    fn grab(&self, window: &WindowId, region: Region) -> Option<Picture> {
+        match window {
+            WindowId::X11(_) => self.x11.grab(window, region),
+            WindowId::Kwin(_) => self.started()?.grab(window, region),
+        }
+    }
+
+    fn interval(&self, window: &WindowId) -> Duration {
+        match window {
+            WindowId::X11(_) => self.x11.interval(window),
+            WindowId::Kwin(_) => kwin::INTERVAL,
+        }
+    }
+}
+
+/// The way to ask the desktop about windows. By default the X server, and
+/// KWin for what the X server does not have (on KDE); `VNTEXT_SCREEN=kwin`
+/// has KWin asked about everything, `VNTEXT_SCREEN=x11` the X server alone.
+pub fn open() -> Result<Box<dyn Screen>, String> {
+    let kwin = || Kwin::shared().map(|kwin| Box::new(KwinScreen(kwin)) as Box<dyn Screen>);
+    match std::env::var("VNTEXT_SCREEN").as_deref() {
+        Ok("kwin") => kwin(),
+        Ok("x11") => Ok(Box::new(X11::open()?)),
+        _ => match (X11::open(), is_kde()) {
+            (Ok(x11), true) => Ok(Box::new(Both { x11, kwin: OnceCell::new(), missing: Cell::new(None) })),
+            (Ok(x11), false) => Ok(Box::new(x11)),
+            (Err(_), true) => kwin(),
+            (Err(e), false) => Err(e),
+        },
+    }
+}
+
+fn is_kde() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("kde")))
+}
+
 impl Picture {
     /// Shrinks a picture of 256 greys to at most `MAX_WIDTH` across, each
     /// pixel the average of a square of the original, and keeps `SHADES`.
-    fn from_grey(grey: &[u8], width: usize, height: usize) -> Picture {
+    pub fn from_grey(grey: &[u8], width: usize, height: usize) -> Picture {
         let by = width.div_ceil(MAX_WIDTH).max(1);
         let (w, h) = (width / by, height / by);
         let mut shades = Vec::with_capacity(w * h);

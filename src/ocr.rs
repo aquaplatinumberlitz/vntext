@@ -11,10 +11,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::screen::{Picture, Region, Screen};
+use crate::screen::{self, Picture, Region, Screen, WindowId};
 use crate::{die, explain, mem, overlay, translate, web, Opts};
 
-const TICK: Duration = Duration::from_millis(150);
 /// Two pictures in a row that differ in less than this share of their
 /// pixels are the same text box at rest; a blinking cursor stays below it.
 const AT_REST: f64 = 0.005;
@@ -115,7 +114,7 @@ pub fn save_region(game: &str, region: Region) {
 
 /// Asks in the terminal where the text box is: the pointer is put on two of
 /// its corners.
-fn pick(screen: &Screen, window: u32) -> Region {
+fn pick(screen: &dyn Screen, window: &WindowId) -> Region {
     let corner = |which: &str| loop {
         eprintln!("put the pointer on the {which} corner of the game's text box, then press Enter here");
         let mut line = String::new();
@@ -133,6 +132,20 @@ fn pick(screen: &Screen, window: u32) -> Region {
         die("the two corners are too close together");
     }
     region
+}
+
+/// The window of the game, given `WINDOW_WITHIN` to appear.
+fn wait_for_window(screen: &dyn Screen, pid: u32) -> Option<WindowId> {
+    let started = Instant::now();
+    loop {
+        if let Some(window) = screen.window_of(pid) {
+            return Some(window);
+        }
+        if started.elapsed() >= WINDOW_WITHIN {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
 }
 
 /// Tells the reader something went wrong, in the terminal and on the strip.
@@ -163,8 +176,8 @@ pub fn spawn(pid: u32, settings: Settings, hub: web::Hub, control: Arc<Control>)
 }
 
 fn read(pid: u32, o: &Settings, hub: &web::Hub, control: &Control, reader: u64) -> Result<(), String> {
-    let screen = Screen::open()?;
-    let window = screen.window_of(pid).ok_or("the game has no X11 window")?;
+    let screen = screen::open()?;
+    let window = wait_for_window(&*screen, pid).ok_or("the game has no X11 window")?;
     let game = mem::name(pid);
     let region = saved_region(&game).ok_or("no text box picked yet")?;
     let mut translator = {
@@ -183,11 +196,11 @@ fn read(pid: u32, o: &Settings, hub: &web::Hub, control: &Control, reader: u64) 
     let mut context: VecDeque<String> = VecDeque::new();
     let mut asked = Instant::now() - BETWEEN_REQUESTS;
     loop {
-        thread::sleep(TICK);
+        thread::sleep(screen.interval(&window));
         if !control.wants(reader) {
             return Ok(());
         }
-        let Some(now) = screen.grab(window, region) else { continue };
+        let Some(now) = screen.grab(&window, region) else { continue };
         rests = if before.as_ref().is_some_and(|b| b.difference(&now) < AT_REST) { rests + 1 } else { 0 };
         before = Some(now.clone());
         if rests < RESTS || asked.elapsed() < BETWEEN_REQUESTS || read.iter().any(|p| p.difference(&now) < NEW) {
@@ -266,18 +279,15 @@ pub fn run(pid: u32, o: &Opts, reading: bool) {
             notice(&hub, "Chưa nhận ra engine của game này. Bấm OCR để đọc khung thoại bằng ảnh.");
         }
     } else {
-        let screen = Screen::open().unwrap_or_else(|e| die(&e));
-        let started = Instant::now();
-        let window = loop {
-            match screen.window_of(pid) {
-                Some(window) => break window,
-                None if started.elapsed() < WINDOW_WITHIN => thread::sleep(Duration::from_millis(500)),
-                None => die("the process has no X11 window; a native Wayland window cannot be pictured"),
-            }
-        };
+        let screen = screen::open().unwrap_or_else(|e| die(&e));
+        let window = wait_for_window(&*screen, pid).unwrap_or_else(|| die("the process has no window that can be pictured"));
         let game = mem::name(pid);
         if o.pick || saved_region(&game).is_none() {
-            save_region(&game, pick(&screen, window));
+            // the pointer is not told of for a Wayland window
+            if matches!(window, WindowId::Kwin(_)) {
+                die("the text box of a Wayland window cannot be picked in the terminal: run with --overlay and pick it on the strip");
+            }
+            save_region(&game, pick(&*screen, &window));
         }
         spawn(pid, Settings::of(o), hub.clone(), control.clone());
     }

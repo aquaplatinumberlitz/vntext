@@ -128,6 +128,17 @@ Chữ chia (食べた, 書いていない…) được đưa về dạng gốc b
 2. Trong Yomitan Settings bật Advanced, rồi bật General → Enable Yomitan API.
 3. Trình duyệt đang mở.
 
+### Cửa sổ Wayland (KWin)
+
+Mặc định tool hỏi máy chủ X về cửa sổ game, và không đụng tới KWin. Trên KDE, nếu sau khoảng hai giây vẫn không có cửa sổ X11 nào của game (game chạy bằng Wayland driver của Wine, hay ứng dụng Wayland thuần), nó chuyển sang hỏi KWin:
+
+- **Vị trí và focus:** tool nạp một KWin script (ghi vào `$XDG_RUNTIME_DIR/vntext-kwin-<pid>.js`, nạp với tên `vntext-<pid>`) báo về cho tool, qua D-Bus, mọi cửa sổ cùng vị trí vùng nội dung, trạng thái thu nhỏ và cửa sổ đang focus mỗi khi có thay đổi. Script được gỡ khi tool thoát, kể cả khi thoát bằng Ctrl+C hay đóng terminal; nếu tool bị `kill -9` thì lần chạy sau gỡ bản sót.
+- **Chụp ô thoại (OCR):** qua `org.kde.KWin.ScreenShot2.CaptureWindow`, chụp riêng cửa sổ game nên không dính dải nổi đè lên. KWin chỉ cho chương trình có file `.desktop` khai `X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2` với `Exec` trỏ đúng file chạy: chạy `vntext install` (hoặc bấm "Thêm vào menu ứng dụng") một lần, và chạy lại nó nếu chuyển file `vntext` sang chỗ khác. Bị từ chối thì KWin báo `NoAuthorized`. Mỗi lần chụp là cả cửa sổ nên nhịp chụp là 300 ms (đo trên máy dev: KWin tốn thêm khoảng 2,5% một nhân, vntext dưới 1%).
+- Cửa sổ Wayland không cho biết con trỏ ở đâu, nên lệnh `ocr` không kèm `--overlay` không khoanh khung thoại trong terminal được: dùng `--overlay` và khoanh trên dải nổi.
+- Cửa sổ game được tìm theo đúng pid; không có thì theo tiến trình cùng cây hoặc cùng `WINEPREFIX`.
+- `VNTEXT_SCREEN=kwin` ép hỏi KWin cho mọi cửa sổ (để thử với game X11, vì KWin thấy cả cửa sổ XWayland); `VNTEXT_SCREEN=x11` chỉ hỏi X. Cửa sổ chọn game chỉ liệt kê cửa sổ X11.
+- Ngoài KDE chưa hỗ trợ cửa sổ Wayland; `vntext doctor` báo nếu thấy game Wine đang chạy bằng Wayland driver.
+
 ### Nguồn dịch
 
 | Nguồn | `--via` | Key | Model mặc định |
@@ -171,7 +182,7 @@ Tool được chia sẻ bằng source: bạn tự build, không có gói cài s�
    | nút chép | `wl-clipboard` | `wl-clipboard` |
    | trình biên dịch C (build SQLite đi kèm) | `base-devel` | `build-essential` |
 
-   Cần phiên Wayland có layer-shell (KDE Plasma, Sway, Hyprland; GNOME không có) và game chạy qua Wine/Proton dưới dạng cửa sổ X11 (XWayland).
+   Cần phiên Wayland có layer-shell (KDE Plasma, Sway, Hyprland; GNOME không có) và game chạy qua Wine/Proton dưới dạng cửa sổ X11 (XWayland). Game dùng Wayland driver của Wine chỉ chạy được trên KDE Plasma (xem [Cửa sổ Wayland](#cửa-sổ-wayland-kwin)).
 2. **Build:** `cargo build --release`
 3. **Đưa vào menu:** `./target/release/vntext install`. Từ đó mở vntext từ menu ứng dụng bằng chuột; nếu `~/.local/bin` có trên PATH thì gõ `vntext` cũng được.
 4. Mở cửa sổ vntext. Nếu máy thiếu gì, đầu cửa sổ hiện khung báo thiếu gì và sửa thế nào (cùng nội dung với `vntext doctor`). Chưa có key nào thì Dịch được bật sẵn với Google Dịch.
@@ -207,7 +218,7 @@ Máy mới cần:
 4. **Game đủ file.** Text lấy từ file của game (gói script, bundle...), nên thư mục game phải nguyên vẹn và tool phải đọc được nó. Bản vá cài đè vào thư mục game được đọc theo luôn.
 5. **Cho phần dịch:** đặt key của nguồn dịch (xem [Nguồn dịch](#nguồn-dịch)), hoặc chép `~/.config/vntext/translate.json`. Bản dịch đã có nằm ở `~/.cache/vntext/<ngôn ngữ>.tsv`; chép theo nếu không muốn dịch lại.
 6. **Tuỳ chọn:** `wl-copy` cho `--clip`; trình duyệt có Yomitan cho `--web`.
-7. **Cho `--overlay` và `ocr`:** game phải là cửa sổ X11 (qua XWayland), vì tool tìm và chụp cửa sổ game qua X11; với Faugus là tắt Wayland driver. Dải nổi cần compositor Wayland có layer-shell (đã thử trên KWin 6.7).
+7. **Cho `--overlay` và `ocr`:** tool tìm và chụp cửa sổ game qua X11 (XWayland); riêng trên KDE nó còn hỏi được KWin về cửa sổ Wayland, xem [Cửa sổ Wayland](#cửa-sổ-wayland-kwin). Dải nổi cần compositor Wayland có layer-shell (đã thử trên KWin 6.7).
 
 Đổi phiên bản Wine/Proton hay giả lập không ảnh hưởng, vì tool tìm theo cấu trúc dữ liệu của engine game chứ không phải của lớp chạy game. Thứ làm hỏng một profile là bản game mới đổi cấu trúc của chính engine; khi đó tool báo không tìm thấy vị trí đọc chứ không hiện sai text.
 
@@ -257,7 +268,8 @@ src/
       text.rs        Gói YPF, script YSTB và cách dò khoá của YU-RIS
   translate.rs       Các nguồn dịch (Gemini, OpenAI, DeepSeek, Claude, server local, Google), có cache
   ocr.rs             Đọc khung thoại từ ảnh chụp qua Gemini
-  screen.rs          Liệt kê, tìm và chụp cửa sổ game qua X11, nén ảnh
+  screen.rs          Giao diện `Screen` hỏi desktop về cửa sổ game (bản X11, bản KWin, bản ghép), liệt kê cửa sổ, nén ảnh
+  kwin.rs            Backend KWin: script báo vị trí và focus, chụp cửa sổ qua ScreenShot2
   overlay.rs         Dải nổi, cụm nút và hộp thiết lập cạnh cửa sổ game (GTK4, layer-shell)
   explain.rs         Đổi chuỗi lỗi thô thành câu tiếng Việt và việc nên làm
   yomitan.rs         Tra từ qua API của Yomitan; đổi nội dung từ điển (structured content) thành markup cho popup

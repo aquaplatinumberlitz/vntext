@@ -25,7 +25,7 @@ use crate::dict::import;
 use crate::explain::Action;
 use crate::dict::lookup::{self, Source, Trouble};
 use crate::dict::store::{Info, Store};
-use crate::screen::{Region, Screen};
+use crate::screen::{self, Region, Screen, WindowId};
 use crate::translate::{self, Service};
 use crate::{mem, ocr, web, yomitan};
 
@@ -413,7 +413,7 @@ struct Ui {
     /// locked, the strip lets clicks through; unlocked, it can be moved,
     /// made wider and its text selected
     locked: bool,
-    game: Option<u32>,
+    game: Option<WindowId>,
     /// where the game's window is, while it is the one being played
     placed: Option<(i32, i32, i32, i32)>,
     /// where the strip is on screen and how wide
@@ -441,7 +441,7 @@ struct Ui {
 struct Overlay {
     ui: RefCell<Ui>,
     events: Receiver<String>,
-    screen: Screen,
+    screen: Box<dyn Screen>,
     display: gdk::Display,
     pid: u32,
     game: String,
@@ -972,8 +972,8 @@ impl Overlay {
             self.render();
         }
         let mut ui = self.ui.borrow_mut();
-        ui.game = ui.game.or_else(|| self.screen.window_of(self.pid));
-        ui.placed = ui.game.and_then(|window| self.screen.placement(window)).filter(|_| self.screen.active_pid() == Some(self.pid));
+        ui.game = ui.game.take().or_else(|| self.screen.window_of(self.pid));
+        ui.placed = ui.game.as_ref().and_then(|window| self.screen.placement(window)).filter(|_| self.screen.active_is(self.pid));
         if ui.placed.is_none() && !ui.picking {
             // the window may have been closed and opened anew
             ui.game = None;
@@ -1656,7 +1656,7 @@ impl Overlay {
 }
 
 fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Control>, settings: ocr::Settings, reading: bool) -> Result<(), String> {
-    let screen = Screen::open()?;
+    let screen = screen::open()?;
     gtk4::init().map_err(|e| e.to_string())?;
     if !gtk4_layer_shell::is_supported() {
         return Err("the compositor has no layer shell".to_string());

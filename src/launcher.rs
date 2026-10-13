@@ -21,7 +21,7 @@ use gtk4::prelude::*;
 use gtk4::glib;
 use serde_json::{json, Value};
 
-use crate::screen::{by_process, Screen};
+use crate::screen::{by_process, X11};
 use crate::translate::{self, Service};
 use crate::{doctor, engines, explain, install, mem, ocr};
 
@@ -191,7 +191,7 @@ struct Row {
 
 struct Launcher {
     window: gtk4::Window,
-    screen: Screen,
+    screen: X11,
     list: gtk4::ListBox,
     empty: gtk4::Label,
     rows: RefCell<Vec<Row>>,
@@ -543,7 +543,7 @@ impl Launcher {
 }
 
 fn build() -> Option<gtk4::Window> {
-    let screen = match Screen::open() {
+    let screen = match X11::open() {
         Ok(screen) => screen,
         Err(e) => {
             eprintln!("{e}");
