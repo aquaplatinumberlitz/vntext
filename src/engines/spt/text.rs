@@ -20,9 +20,23 @@ pub fn split(message: &str) -> (Option<String>, String) {
     (speaker, body.replace("\r\n", ""))
 }
 
+/// The choices of a menu: Shift-JIS text, each choice ended by a backslash
+/// and a zero (two characters, not a NUL).
+pub fn menu(stored: &[u8]) -> Vec<String> {
+    let text = SHIFT_JIS.decode(stored).0;
+    text.split("\\0").map(|choice| choice.trim_matches('\0').to_string()).filter(|choice| !choice.is_empty()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menus() {
+        let stored = encoding_rs::SHIFT_JIS.encode("はい\\0いいえ\\0").0.into_owned();
+        assert_eq!(menu(&stored), ["はい", "いいえ"]);
+        assert!(menu(b"").is_empty());
+    }
 
     #[test]
     fn decode_and_split() {

@@ -25,6 +25,10 @@ const HEADER: usize = 68;
 /// Each pack entry: name padded to 32 bytes, then the script's size.
 const ENTRY_NAME: usize = 0x20;
 const MESSAGE: u32 = 0x08;
+/// A menu of choices.
+const MENU: u32 = 0x0E;
+/// Shown before each choice of a menu.
+const CHOICE_MARK: &str = "▶ ";
 /// In the VM state, the command index sits this far after the script header
 /// (count, size and a pointer come in between).
 const INDEX_AT: usize = HEADER + 12;
@@ -33,6 +37,7 @@ struct Script {
     /// the first HEADER + 8 bytes, as the VM state repeats them
     head: Vec<u8>,
     /// passage index of each command, for the commands that show a message
+    /// or a menu
     passages: Vec<Option<usize>>,
 }
 
@@ -40,8 +45,15 @@ pub struct Pack {
     file: String,
     scripts: Vec<Script>,
     by_head: HashMap<Vec<u8>, usize>,
-    /// stored text of every message, in pack order
-    messages: Vec<Vec<u8>>,
+    /// every message and menu, in pack order
+    messages: Vec<Message>,
+}
+
+enum Message {
+    /// stored text, as the engine keeps it
+    Text(Vec<u8>),
+    /// the choices of a menu
+    Menu(Vec<String>),
 }
 
 fn word(data: &[u8], at: usize) -> Option<usize> {
@@ -69,13 +81,24 @@ impl Pack {
                 let (command, length) = (word(script, at)? as u32, word(script, at + 4)?);
                 let arguments = script.get(at + 8..at + 8 + length)?;
                 at += 8 + length;
+                if command == MENU {
+                    // `?, ?, length` and then the choices, each ended by a
+                    // backslash and a zero, in plain Shift-JIS
+                    let listed = arguments.get(12..)?;
+                    let choices = text::menu(listed);
+                    passages.push((!choices.is_empty()).then_some(messages.len()));
+                    if !choices.is_empty() {
+                        messages.push(Message::Menu(choices));
+                    }
+                    continue;
+                }
                 if command != MESSAGE {
                     passages.push(None);
                     continue;
                 }
                 let (channel, length) = (word(arguments, 12)?, word(arguments, 16)?);
                 passages.push(Some(messages.len()));
-                messages.push(arguments.get(20 + channel..20 + channel + length)?.to_vec());
+                messages.push(Message::Text(arguments.get(20 + channel..20 + channel + length)?.to_vec()));
             }
             scripts.push(Script { head: script[..HEADER + 8].to_vec(), passages });
         }
@@ -113,9 +136,17 @@ impl Engine for Pack {
     }
 
     fn passage(&self, index: usize) -> Passage {
-        let raw = text::decode(&self.messages[index]);
-        let (speaker, line) = text::split(&raw);
-        Passage { speaker, lines: vec![line], raw }
+        match &self.messages[index] {
+            Message::Text(stored) => {
+                let raw = text::decode(stored);
+                let (speaker, line) = text::split(&raw);
+                Passage { speaker, lines: vec![line], raw }
+            }
+            Message::Menu(choices) => {
+                let lines: Vec<String> = choices.iter().map(|choice| format!("{CHOICE_MARK}{choice}")).collect();
+                Passage { speaker: None, raw: lines.join("\n"), lines }
+            }
+        }
     }
 
     /// The VM state is recognised by a script's header, command count and
