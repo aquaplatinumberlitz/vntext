@@ -6,6 +6,40 @@ Tool đọc bộ nhớ của game từ bên ngoài (`/proc/<pid>/mem`), không i
 
 Chỉ chạy trên Linux. Dùng cá nhân, chưa công bố.
 
+## Vì sao viết tool này khi đã có Textractor và agent
+
+Hai công cụ có sẵn đều lấy text bằng cách can thiệp vào game lúc nó chạy. vntext đi đường khác: đọc script từ file của game, rồi chỉ nhìn vào bộ nhớ để biết game đang đứng ở câu nào.
+
+**[Textractor](https://github.com/Artikash/Textractor)** là chương trình Windows. Nó inject một DLL vào game và hook các hàm vẽ chữ của Windows cùng các hàm xử lý text của nhiều engine; game nào chưa có hook sẵn thì người dùng tự thêm bằng H-code. Mỗi lần hàm bị hook được gọi, nó nhận được một chuỗi.
+
+**[agent](https://github.com/0xDC00/agent)** dùng Frida để inject JavaScript vào process, mỗi game một script hook vào đúng hàm của game đó. Với game Switch, nó hook vào code mà emulator dịch ra, nên script phụ thuộc cả phiên bản game lẫn cách emulator sinh code.
+
+| | Textractor | agent (Frida) | vntext |
+|---|---|---|---|
+| Cách lấy text | Hook hàm trong process game | Hook hàm trong process game hoặc emulator | Đọc script từ file game, đọc vị trí từ bộ nhớ |
+| Can thiệp vào game | Inject DLL | Inject Frida | Không; chỉ đọc từ bên ngoài |
+| Thứ nó phụ thuộc | Engine và cách game gọi hàm vẽ chữ | Phiên bản game và phiên bản emulator | Định dạng script và cấu trúc dữ liệu của engine |
+| Game được hỗ trợ | Rất nhiều; game lạ vẫn thử được bằng hook chung | Theo danh sách script có sẵn | Chỉ các engine có profile (xem [Tình trạng](#tình-trạng)) |
+| Game chưa hỗ trợ | Tự tìm hook hoặc H-code | Viết script hook mới | Viết profile mới bằng Rust |
+| Thứ nhận được | Chuỗi tại thời điểm hàm được gọi | Chuỗi tại thời điểm hàm được gọi | Cả đoạn thoại kèm tên người nói, và toàn bộ script |
+| Nền tảng | Windows; trên Linux phải chạy trong cùng Wine prefix với game | Windows, Linux, macOS | Linux |
+
+Lý do cụ thể dẫn tới dự án:
+
+1. **Hook gãy khi emulator đổi.** agent dừng hoạt động trên Ryujinx 1.3.3 sau khi emulator chuyển sang .NET 9: Frida không còn bám được vào process. Script hook không sai, nhưng lớp bên dưới nó đổi thì nó chết theo. vntext không đụng tới code đang chạy nên không có lớp nào như vậy để gãy.
+2. **Chạy game Windows trên Linux.** Textractor phải chạy trong cùng Wine prefix với game và inject được vào nó. Với game mở qua launcher (Faugus, umu, Proton trong container) thì mỗi game một prefix, việc đưa Textractor vào từng cái rất phiền. vntext chạy ngoài container, chỉ cần pid.
+3. **Text sạch và đủ ngữ cảnh.** Hook trả về chuỗi theo từng lần gọi hàm: có game ra từng ký tự, có game lặp câu, có game trộn cả tên menu, và tên người nói thường nằm ở một hook khác. Vì vntext lấy text từ script, mỗi đoạn ra đúng một lần, đã bỏ mã điều khiển và furigana, có tên người nói.
+4. **Dịch cả đoạn và dịch trước.** Có toàn bộ script nên tool gửi cho máy dịch cả đoạn kèm các câu trước đó làm ngữ cảnh, và dịch sẵn vài đoạn kế tiếp trong lúc người đọc còn ở đoạn hiện tại. Công cụ hook chỉ biết câu vừa hiện.
+
+Cái giá phải trả:
+
+- **Ít game hơn nhiều.** Textractor chạy được trên rất nhiều game mà không ai phải làm gì thêm. vntext chỉ chạy trên engine đã có profile; chế độ quét chung dành cho game lạ chưa dùng được (xem [Giới hạn](#giới-hạn)).
+- **Mỗi engine là một lần dịch ngược.** Phải biết định dạng gói, định dạng script và chỗ engine giữ vị trí đọc. Nếu đã có người nghiên cứu định dạng thì nhanh; nếu chưa thì viết H-code cho Textractor thường nhanh hơn viết profile.
+- **Text động thì không thấy.** Thứ game ghép lúc chạy (tên do người chơi đặt, số liệu trong câu, giao diện chiến đấu) không nằm trong script nên tool không có, còn hook thì bắt được.
+- **Chỉ Linux.**
+
+Nếu chơi trên Windows, hoặc game dùng engine chưa có profile, Textractor vẫn là lựa chọn hợp lý hơn. vntext dành cho trường hợp chơi trên Linux và muốn text chính xác từng đoạn để đọc cùng bản dịch.
+
 ## Tình trạng
 
 | Game | Engine | Nền tảng | Kết quả |
@@ -47,6 +81,27 @@ Các lệnh khác:
 | `watch <pid\|tên> <địa chỉ hex> <utf8\|utf16\|sjis>` | Theo dõi một địa chỉ cố định |
 
 Tuỳ chọn chung: `--clip` (đưa vào clipboard qua `wl-copy`), `--all` (quét cả vùng chỉ đọc), `--min N` (độ dài chuỗi tối thiểu). Khi có profile engine: `--raw` in text nguyên dạng engine lưu, gồm cả mã điều khiển; `--debug` in mọi lần một ô vị trí đổi giá trị, dùng khi tool hiện sai đoạn hoặc đứng im.
+
+## Cài trên máy mới
+
+Tool không ghi nhớ thứ gì gắn với một máy: mỗi lần chạy nó đọc lại script từ thư mục của game đang mở và quét lại bộ nhớ để tìm vị trí đọc theo nội dung, không theo địa chỉ cố định. Địa chỉ vốn đã đổi mỗi lần mở game, nên đổi máy, đổi RAM hay cài lại hệ điều hành không cần chỉnh gì trong code. Phần này mới suy ra từ cách tool hoạt động, chưa thử trên máy thứ hai.
+
+Máy mới cần:
+
+1. **Linux.** Tool đọc bộ nhớ qua `/proc/<pid>/mem`, `/proc/<pid>/maps` và `/proc/<pid>/pagemap`, nên không chạy trên Windows thuần. Game Windows chạy qua Wine/Proton; game Switch chạy qua Ryujinx.
+2. **Quyền đọc process.** Chạy tool bằng cùng user với game và đặt `kernel.yama.ptrace_scope = 0`. Nhiều distro mặc định là 1:
+   ```
+   sudo sysctl kernel.yama.ptrace_scope=0                                         # tới lần khởi động lại
+   echo 'kernel.yama.ptrace_scope = 0' | sudo tee /etc/sysctl.d/10-ptrace.conf   # giữ luôn
+   ```
+3. **Rust** (`cargo`) để build: `cargo build --release`. Các thư viện đều là Rust thuần, không cần gói hệ thống nào. Cũng có thể chép thẳng file `target/release/vntext` sang máy x86-64 khác.
+4. **Game đủ file.** Text lấy từ file của game (gói script, bundle...), nên thư mục game phải nguyên vẹn và tool phải đọc được nó. Bản vá cài đè vào thư mục game được đọc theo luôn.
+5. **Cho phần dịch:** đặt `GEMINI_API_KEY`. Bản dịch đã có nằm ở `~/.cache/vntext/<ngôn ngữ>.tsv`; chép theo nếu không muốn dịch lại.
+6. **Tuỳ chọn:** `wl-copy` cho `--clip`; trình duyệt có Yomitan cho `--web`.
+
+Đổi phiên bản Wine/Proton hay giả lập không ảnh hưởng, vì tool tìm theo cấu trúc dữ liệu của engine game chứ không phải của lớp chạy game. Thứ làm hỏng một profile là bản game mới đổi cấu trúc của chính engine; khi đó tool báo không tìm thấy vị trí đọc chứ không hiện sai text.
+
+Lưu ý khi tìm game theo tên: Linux chỉ giữ 15 byte đầu của tên process, nên chỉ cần gõ phần đầu tên file chạy (`AGE.EXE`, `VenusBloodSavio`, `信天翁航海録`).
 
 ## Cấu trúc
 
@@ -252,3 +307,6 @@ Engine đã nhận diện được trong `/mnt/evo860/HGAME/` (theo file đặc 
 - [shimamura-sakura/yuri](https://github.com/shimamura-sakura/yuri): bộ dịch ngược và tài liệu định dạng của YU-RIS.
 - Bộ công cụ patch tiếng Anh cho 催眠術2 (`blackrb_spt.py`, không rõ tác giả): nguồn của định dạng gói `*_spt.dat` và file `.spt`.
 - [0xDC00/agent](https://github.com/0xDC00/agent): text hooker dùng Frida, điểm xuất phát của dự án.
+- [Artikash/Textractor](https://github.com/Artikash/Textractor): text hooker phổ biến nhất trên Windows; so sánh ở mục [Vì sao viết tool này](#vì-sao-viết-tool-này-khi-đã-có-textractor-và-agent).
+- [Kelebek1/Eushully-Decompiler](https://github.com/Kelebek1/Eushully-Decompiler): định dạng script và gói của engine AGE.
+- [Love-in-idleness/LiarsoftTool](https://github.com/Love-in-idleness/LiarsoftTool): định dạng gói XFL và script GSC của Liar-soft.
