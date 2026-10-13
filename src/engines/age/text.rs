@@ -197,6 +197,56 @@ pub struct Shown {
     pub to: u32,
 }
 
+/// Instructions that call another script (`call-script`), and those that end
+/// a stretch of straight code.
+const CALL_SCRIPT: u32 = 0x03;
+const ENDS_CODE: [u32; 6] = [0x02, 0x05, 0x8C, 0x8F, 0xA0, CALL_SCRIPT];
+
+/// Whether some Japanese is in it: kana, or a character of the CJK block.
+fn japanese(text: &str) -> bool {
+    text.chars().any(|c| ('\u{3040}'..='\u{30FF}').contains(&c) || ('\u{4E00}'..='\u{9FFF}').contains(&c))
+}
+
+/// A menu of choices: the labels are put into a list of strings one after
+/// the other, then a script of the system is called to draw the menu and
+/// wait. The question, if there is one, is put into a string of its own just
+/// before.
+pub struct Menu {
+    pub question: Option<String>,
+    pub labels: Vec<String>,
+    /// the place of the `call-script`, in words; the interpreter stands on
+    /// it while the menu is up
+    pub call_at: u32,
+}
+
+/// Finds the menus of a script: a `call-script` with two or more labels
+/// assigned in the straight code before it.
+pub fn menus(script: &[u8], code: &[Instruction]) -> Vec<Menu> {
+    let mut found = Vec::new();
+    for (k, call) in code.iter().enumerate().filter(|(_, i)| i.code == CALL_SCRIPT) {
+        let mut labels = Vec::new();
+        let mut question = None;
+        for before in code[..k].iter().rev().take(60) {
+            if ENDS_CODE.contains(&before.code) {
+                break;
+            }
+            if let (SET_STRING, [(kind, _), (STRING, text)]) = (before.code, &before.arguments[..]) {
+                let Some(text) = string(script, *text).filter(|t| japanese(t)) else { continue };
+                if *kind == LOCAL_STRING_POINTER {
+                    labels.push(text);
+                } else if !labels.is_empty() && question.is_none() {
+                    question = Some(text);
+                }
+            }
+        }
+        if labels.len() >= 2 {
+            labels.reverse();
+            found.push(Menu { question, labels, call_at: call.at });
+        }
+    }
+    found
+}
+
 /// The text of a script. A passage is every `show-text` of fixed text up to
 /// a `wait-for-input`; `display-furigana` in between carries a word and
 /// its reading, of which the word is kept.
@@ -376,6 +426,29 @@ mod tests {
         let strings = HashMap::from([(107, "太郎".to_string()), (200 + 7 * 6 + 2, "謎の男".to_string())]);
         assert_eq!(naming.name(&strings, (7, 0)).unwrap(), "太郎");
         assert_eq!(naming.name(&strings, (7, 2)).unwrap(), "謎の男");
+    }
+
+    #[test]
+    fn menu_of_labels() {
+        let inverted = |text: &str| -> Vec<u8> { encoding_rs::SHIFT_JIS.encode(text).0.iter().map(|b| !b).chain([0xFF]).collect() };
+        // question, two labels, the call; strings follow the code
+        let code = [
+            SET_STRING, GLOBAL_STRING, 9, STRING, 18,
+            SET_STRING, LOCAL_STRING_POINTER, 0, STRING, 26,
+            SET_STRING, LOCAL_STRING_POINTER, 0, STRING, 30,
+            CALL_SCRIPT, NUMBER, 7,
+        ];
+        let mut script = b"SYS4472 ".to_vec();
+        script.extend(words(&[1, 2, 3, 4, 5, 6, 0x1C, 0, 18, 0, 18, 0, 18]));
+        script.extend(words(&code));
+        for (at, text) in [(18, "開けますか？"), (26, "はい"), (30, "いいえ")] {
+            script.resize(HEADER + at * 4, 0);
+            script.extend(inverted(text));
+        }
+        let code = instructions(&script).unwrap();
+        let found = menus(&script, &code);
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].question.as_deref(), found[0].labels.clone(), found[0].call_at), (Some("開けますか？"), vec!["はい".to_string(), "いいえ".to_string()], 15));
     }
 
     #[test]

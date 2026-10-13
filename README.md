@@ -240,6 +240,8 @@ Profile age (`engines/age/`), cho engine AGE của Eushully với script `SYS4` 
 4. Các mã `F040`–`F043` là glyph riêng của engine (gạch ngang và thanh kéo dài nguyên âm), được đổi thành `―` và `ー`.
 5. Trong RAM, với mỗi script đang chạy, trình thông dịch giữ con trỏ tới đầu phần lệnh, con trỏ tới lệnh đang đứng và bản sao 12 số trong header của script (số biến cục bộ, độ dài và vị trí ba bảng sau phần lệnh). Tool tìm bản ghi này qua 12 số đó, nhận ra script nào đang chạy, và lấy khung thoại chứa lệnh đang đứng. Nếu hai script có cùng 12 số (bản gốc và bản vá), tool so phần lệnh trong RAM để chọn.
 
+6. Menu lựa chọn không có lệnh riêng: script gán nhãn từng lựa chọn vào một mảng chuỗi (`set-string` vào phần tử mảng), câu hỏi nếu có thì gán vào một chuỗi toàn cục ngay trước đó, rồi gọi một script hệ thống (`call-script`) để vẽ menu và chờ. Tool tìm các `call-script` có từ hai nhãn trở lên được gán trong đoạn code thẳng ngay phía trước. Khi menu hiện, bản ghi của trình thông dịch là của script hệ thống, còn bản ghi của script truyện bị đẩy xuống ô kế tiếp (cách 0x168 byte), đứng đúng ở lệnh `call-script`; tool đọc ô đang chạy rồi nhìn các ô sau nó. Bản ghi cũ sót lại sau khi menu đóng bị loại bằng cách so con trỏ code: nếu trùng với script đang chạy thì nó là bản cũ. Hầu hết menu là hộp có/không (khoảng 564 menu trong 124 script cảnh, chỉ 52 nhãn khác nhau). Đã kiểm tra trên một menu.
+
 Định dạng file và bảng lệnh lấy từ [Kelebek1/Eushully-Decompiler](https://github.com/Kelebek1/Eushully-Decompiler).
 
 Profile escude (`engines/escude/`), cho engine của Escu:de (廃村少女 弐):
