@@ -21,7 +21,7 @@ use gtk4::prelude::*;
 use gtk4::glib;
 use serde_json::{json, Value};
 
-use crate::screen::{by_process, X11};
+use crate::screen::{self, by_process, X11};
 use crate::translate::{self, Service};
 use crate::{doctor, engines, explain, install, mem, ocr};
 
@@ -202,6 +202,8 @@ struct Launcher {
     checks: gtk4::Box,
     checked: (Sender<doctor::Env>, Receiver<doctor::Env>),
     allowed: (Sender<Result<(), String>>, Receiver<Result<(), String>>),
+    /// the processes whose window is a Wayland one, as the last check found them
+    wayland: RefCell<Vec<u32>>,
     options: gtk4::Box,
     translate: gtk4::Switch,
     language: gtk4::DropDown,
@@ -254,7 +256,10 @@ impl Launcher {
     /// Lists the windows on screen anew: games that have appeared get a
     /// row, and a look into their engine; rows of games that are gone go.
     fn refresh(self: &Rc<Self>) {
-        let now = by_process(self.screen.windows(), std::process::id());
+        // X11 windows, and those that only KWin knows of
+        let mut windows = self.screen.windows();
+        windows.extend(screen::wayland_windows(&self.wayland.borrow()));
+        let now = by_process(windows, std::process::id());
         self.rows.borrow_mut().retain(|row| {
             let there = now.iter().any(|w| w.pid == row.pid);
             if !there {
@@ -313,6 +318,7 @@ impl Launcher {
             }
         }
         if let Some(env) = self.checked.1.try_iter().last() {
+            *self.wayland.borrow_mut() = env.wayland_pids.clone();
             self.show_checks(&env);
         }
         if let Some(allowed) = self.allowed.1.try_iter().last() {
@@ -605,6 +611,7 @@ fn build() -> Option<gtk4::Window> {
         ended: mpsc::channel(),
         checks,
         checked: mpsc::channel(),
+        wayland: RefCell::default(),
         allowed: mpsc::channel(),
         options,
         translate: translate_on.clone(),

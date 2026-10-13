@@ -106,7 +106,7 @@ Game chưa có profile thì đọc bằng ảnh chụp khung thoại:
 
 Dải nằm ngay dưới cửa sổ game (hết chỗ thì ở mép trên bên trong cửa sổ) và chỉ hiện khi cửa sổ game đang được chọn. Trên dải có tên người nói, câu thoại, nhãn nguồn (`ENGINE` là lấy từ script qua profile, `OCR` là đọc từ ảnh) và nút ghi nguồn đang dịch; bấm nút đó để đổi nguồn dịch.
 
-Cụm nút bên phải cửa sổ game, từ trên xuống, có sáu nút: ẩn/hiện dải; mở khoá dải (kéo `⠿` để dời, kéo `↔` để đổi bề rộng, quét chữ để chép); chép câu đang hiện; đổi giữa bản dịch, câu Nhật, cả hai; bật/tắt OCR; và bánh răng mở hộp thiết lập. Lăn chuột trên dải (khi dải nhận chuột: đang mở khoá hoặc đang hiện chữ Nhật) để xem lại câu cũ; dải ghi "ENGINE · 3/40" khi đang xem câu cũ, và có câu mới thì quay về câu mới nhất.
+Cụm nút bên phải cửa sổ game, từ trên xuống, có sáu nút: ẩn/hiện dải; mở khoá dải (kéo `⠿` để dời, kéo `↔` để đổi bề rộng, quét chữ để chép); chép câu đang hiện; đổi giữa bản dịch, câu Nhật, cả hai; bật/tắt OCR; và bánh răng mở hộp thiết lập. Lăn chuột trên dải (khi dải nhận chuột: đang mở khoá hoặc đang hiện chữ Nhật) để xem lại câu cũ; dải ghi "ENGINE · 3/40" khi đang xem câu cũ, và có câu mới thì quay về câu mới nhất. Muốn dừng đọc mà không tắt game: bánh răng, tab hiển thị, nút "Dừng đọc game này"; mở từ cửa sổ chọn game thì quay về đó.
 
 Hộp thiết lập có bốn tab: **Hiển thị** (cỡ chữ, độ mờ nền, màu chữ, chế độ Dịch/Nhật/cả hai, đặt lại vị trí và bề rộng), **Dịch** (nguồn dịch, key, model), **Từ điển** (xem [Từ điển](#từ-điển)), **OCR** (bật/tắt đọc bằng ảnh, khoanh lại khung thoại). Thiết lập của dải lưu theo từng game trong `~/.config/vntext/overlay.json`; file cũ thiếu độ mờ và màu vẫn đọc được. Lần đầu dải hiện trên máy, nó hiện ba dòng chỉ dẫn thay cho câu thoại cho tới khi bấm "Đã hiểu" (đánh dấu bằng khoá `@intro` trong cùng file).
 
@@ -137,6 +137,7 @@ Mặc định tool hỏi máy chủ X về cửa sổ game, và không đụng t
 - Cửa sổ Wayland không cho biết con trỏ ở đâu, nên lệnh `ocr` không kèm `--overlay` không khoanh khung thoại trong terminal được: dùng `--overlay` và khoanh trên dải nổi.
 - Cửa sổ game được tìm theo đúng pid; không có thì theo tiến trình cùng cây hoặc cùng `WINEPREFIX`.
 - `VNTEXT_SCREEN=kwin` ép hỏi KWin cho mọi cửa sổ (để thử với game X11, vì KWin thấy cả cửa sổ XWayland); `VNTEXT_SCREEN=x11` chỉ hỏi X. Cửa sổ chọn game chỉ liệt kê cửa sổ X11.
+- Cửa sổ chọn game liệt kê cả game chạy bằng Wayland driver của Wine (trên KDE). Nếu KWin từ chối cho chụp, dải nổi báo và chỉ cách sửa: bấm "Thêm vào menu ứng dụng" rồi đọc lại.
 - Ngoài KDE chưa hỗ trợ cửa sổ Wayland; `vntext doctor` báo nếu thấy game Wine đang chạy bằng Wayland driver.
 
 ### Nguồn dịch

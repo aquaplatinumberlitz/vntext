@@ -41,7 +41,9 @@ pub struct Explained {
 pub fn explain(raw: &str) -> Explained {
     let lower = raw.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| lower.contains(w));
-    let (text, action) = if has(&["429", "rate limit", "quota", "resource_exhausted", "too many requests"]) {
+    let (text, action) = if not_authorized(raw) {
+        ("KWin chưa cho vntext chụp cửa sổ game, nên OCR không đọc được. Mở cửa sổ chọn game (chạy vntext không tham số), bấm \"Thêm vào menu ứng dụng\", rồi đọc lại game.", None)
+    } else if has(&["429", "rate limit", "quota", "resource_exhausted", "too many requests"]) {
         ("Dịch vụ dịch báo đã hết hạn mức (quá nhiều yêu cầu). Đợi một lúc, hoặc dịch bằng Google, không cần key.", Some(Action::Google))
     } else if has(&["401", "403", "unauthorized", "forbidden", "api key", "api_key", "permission_denied", "invalid_api"]) && !has(&["os error 13"]) {
         ("Key của dịch vụ dịch không đúng hoặc đã hết hiệu lực. Nhập lại key ở thiết lập dịch.", Some(Action::Translate))
@@ -51,8 +53,8 @@ pub fn explain(raw: &str) -> Explained {
         ("Không nối được mạng, hoặc dịch vụ không trả lời kịp. Kiểm tra kết nối rồi thử lại; tool sẽ tự thử lại.", None)
     } else if has(&["yomitan", "127.0.0.1:19633"]) {
         ("Chưa hỏi được Yomitan. Mở Firefox và bật Yomitan API, hoặc dùng từ điển nhập vào tool.", Some(Action::Dictionary))
-    } else if has(&["no x11 window", "x11 window", "cannot reach the x server"]) {
-        ("Game này không có cửa sổ X11 để bám theo. Nếu game chạy bằng Wayland driver của Wine, tắt driver đó (Faugus: bỏ tuỳ chọn Wayland).", None)
+    } else if has(&["no x11 window", "x11 window", "cannot reach the x server", "no window that can be pictured"]) {
+        ("Không tìm thấy cửa sổ của game. Nếu cửa sổ đang thu nhỏ thì mở nó lên. Game chạy bằng Wayland driver của Wine chỉ được hỗ trợ trên KDE; ở desktop khác hãy tắt driver đó (Faugus: bỏ tuỳ chọn Wayland).", None)
     } else if has(&["permission denied", "os error 13", "not allowed here", "ptrace"]) {
         ("Hệ thống chặn tool đọc bộ nhớ game. Mở cửa sổ chọn game: khung kiểm tra ở đầu có nút \"Cho phép\".", None)
     } else if has(&["target process is gone", "no process matching"]) {
@@ -61,6 +63,12 @@ pub fn explain(raw: &str) -> Explained {
         return Explained { text: format!("Có lỗi: {}", raw.trim()), action: None };
     };
     Explained { text: text.to_string(), action }
+}
+
+/// Whether an error is KWin refusing to let this program take pictures.
+pub fn not_authorized(raw: &str) -> bool {
+    let lower = raw.to_lowercase();
+    lower.contains("noauthorized") || lower.contains("not authorized")
 }
 
 /// The event to send to the strip for a raw error: a `notice`, which takes
@@ -112,7 +120,11 @@ mod tests {
 
     #[test]
     fn the_game_and_the_system() {
-        assert!(said("the game has no X11 window").1.contains("X11"));
+        assert!(said("the game has no X11 window").1.contains("cửa sổ của game"));
+        assert!(said("OCR: the game has no window that can be pictured").1.contains("cửa sổ của game"));
+        // KWin's refusal is not taken for a wrong key
+        let refused = said("screenshot: org.kde.KWin.ScreenShot2.Error.NoAuthorized: The process is not authorized to take a screenshot");
+        assert!(refused.0.is_none() && refused.1.contains("Thêm vào menu ứng dụng"));
         assert!(said("OCR: the game has no X11 window").1.contains("Wayland driver"));
         let memory = said("cannot open pid 12: Permission denied (os error 13)");
         assert!(memory.1.contains("Cho phép") && memory.0.is_none());

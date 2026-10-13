@@ -1229,6 +1229,14 @@ impl Overlay {
         let overlay = self.clone();
         reset.connect_clicked(move |_| overlay.restyle(|l| l.place = None));
         page.append(&reset);
+
+        // The strip has no window to close, and a reader who came by the
+        // launcher has no terminal to stop it from: this is the way back.
+        let stop = gtk4::Button::with_label("Dừng đọc game này");
+        stop.set_tooltip_text(Some("Tắt dải nổi; game vẫn chạy. Mở từ cửa sổ chọn game thì quay về đó."));
+        stop.set_halign(gtk4::Align::Start);
+        stop.connect_clicked(|_| std::process::exit(0));
+        page.append(&stop);
         page
     }
 

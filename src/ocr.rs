@@ -177,7 +177,7 @@ pub fn spawn(pid: u32, settings: Settings, hub: web::Hub, control: Arc<Control>)
 
 fn read(pid: u32, o: &Settings, hub: &web::Hub, control: &Control, reader: u64) -> Result<(), String> {
     let screen = screen::open()?;
-    let window = wait_for_window(&*screen, pid).ok_or("the game has no X11 window")?;
+    let window = wait_for_window(&*screen, pid).ok_or("the game has no window that can be pictured")?;
     let game = mem::name(pid);
     let region = saved_region(&game).ok_or("no text box picked yet")?;
     let mut translator = {
@@ -195,12 +195,28 @@ fn read(pid: u32, o: &Settings, hub: &web::Hub, control: &Control, reader: u64) 
     let mut read: VecDeque<Picture> = VecDeque::new();
     let mut context: VecDeque<String> = VecDeque::new();
     let mut asked = Instant::now() - BETWEEN_REQUESTS;
+    let mut refused: Option<String> = None;
     loop {
         thread::sleep(screen.interval(&window));
         if !control.wants(reader) {
             return Ok(());
         }
-        let Some(now) = screen.grab(&window, region) else { continue };
+        let Some(now) = screen.grab(&window, region) else {
+            // said once, not at every picture that is not taken
+            let why = screen.refused(&window);
+            if why.is_some() && why != refused {
+                let why = why.as_deref().unwrap_or_default();
+                // a window that is minimised cannot be pictured either, which is nothing to tell the reader
+                if explain::not_authorized(why) {
+                    trouble(hub, &format!("screenshot: {why}"));
+                } else {
+                    eprintln!("\x1b[33mno picture of the window: {why}\x1b[0m");
+                }
+            }
+            refused = why;
+            continue;
+        };
+        refused = None;
         rests = if before.as_ref().is_some_and(|b| b.difference(&now) < AT_REST) { rests + 1 } else { 0 };
         before = Some(now.clone());
         if rests < RESTS || asked.elapsed() < BETWEEN_REQUESTS || read.iter().any(|p| p.difference(&now) < NEW) {

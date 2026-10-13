@@ -108,6 +108,9 @@ game cũ thấy tùy chọn cũ. Các lệnh dòng lệnh cũ chạy y như trư
 **Kết quả:** rê chuột lên chữ Nhật trên dải nổi là ra nghĩa, không cần
 Firefox. Người dùng tự tải từ điển Yomitan (file zip) và thả vào tool.
 
+**Tình trạng:** đã làm xong trên nhánh `newbie` (bước 1 ở commit `6ca5f1d`,
+phần còn lại ở commit "Stage 2"). Chưa thử với một từ điển thật.
+
 **Quyết định đã chốt:**
 - Không nhúng máy JS, không chép cả Yomitan. Lấy **bảng luật chia từ của
   Yomitan nguyên xi dưới dạng dữ liệu**, viết lại phần máy bằng Rust (phần

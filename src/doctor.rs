@@ -35,6 +35,8 @@ pub struct Env {
     pub ptrace: Option<String>,
     /// a game is running with Wine's Wayland driver, so its window is not an X11 one
     pub wayland_game: bool,
+    /// the processes that have that driver loaded
+    pub wayland_pids: Vec<u32>,
     pub wl_copy: bool,
     pub dictionaries: bool,
     pub yomitan: bool,
@@ -99,13 +101,15 @@ pub fn checks(env: &Env) -> Vec<Check> {
 /// only the program that has started it can give.
 pub fn gather(layer_shell: bool) -> Env {
     let keys = translate::SERVICES.iter().filter(|k| k.service.keyed() && !translate::setup(k.service).key.is_empty()).map(|k| k.label).collect();
+    let wayland = wine_on_wayland();
     Env {
         session: std::env::var("XDG_SESSION_TYPE").ok(),
         desktop: std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(),
         layer_shell,
         x_server: X11::open().is_ok(),
         ptrace: std::fs::read_to_string(PTRACE).ok(),
-        wayland_game: wine_on_wayland(),
+        wayland_game: !wayland.is_empty(),
+        wayland_pids: wayland,
         wl_copy: on_path("wl-copy"),
         dictionaries: Store::open().is_ok_and(|store| store.ready()),
         yomitan: yomitan::lookup("あ").is_ok(),
@@ -113,11 +117,12 @@ pub fn gather(layer_shell: bool) -> Env {
     }
 }
 
-/// Whether a process of this user has Wine's Wayland driver loaded, which
-/// is what makes a game's window a Wayland one.
-fn wine_on_wayland() -> bool {
-    let Ok(procs) = std::fs::read_dir("/proc") else { return false };
-    procs.flatten().filter(|e| e.file_name().to_string_lossy().bytes().all(|b| b.is_ascii_digit())).any(|e| std::fs::read_to_string(e.path().join("maps")).is_ok_and(|maps| maps.contains("winewayland.drv")))
+/// The processes of this user that have Wine's Wayland driver loaded,
+/// which is what makes a game's window a Wayland one.
+fn wine_on_wayland() -> Vec<u32> {
+    let Ok(procs) = std::fs::read_dir("/proc") else { return Vec::new() };
+    let pids = procs.flatten().filter_map(|e| e.file_name().to_string_lossy().parse::<u32>().ok());
+    pids.filter(|pid| std::fs::read_to_string(format!("/proc/{pid}/maps")).is_ok_and(|maps| maps.contains("winewayland.drv"))).collect()
 }
 
 /// Whether a program of that name is in one of the directories of `PATH`.
@@ -165,7 +170,7 @@ mod tests {
     use super::*;
 
     fn fine() -> Env {
-        Env { session: Some("wayland".to_string()), desktop: "KDE".to_string(), layer_shell: true, x_server: true, ptrace: Some("0\n".to_string()), wayland_game: false, wl_copy: true, dictionaries: true, yomitan: false, keys: Vec::new() }
+        Env { session: Some("wayland".to_string()), desktop: "KDE".to_string(), layer_shell: true, x_server: true, ptrace: Some("0\n".to_string()), wayland_game: false, wayland_pids: Vec::new(), wl_copy: true, dictionaries: true, yomitan: false, keys: Vec::new() }
     }
 
     fn failing(env: &Env) -> Vec<&'static str> {

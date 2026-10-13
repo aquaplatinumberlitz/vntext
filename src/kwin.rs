@@ -15,7 +15,7 @@ use serde_json::Value as Json;
 use zbus::blocking::Connection;
 use zbus::zvariant::{Fd, OwnedValue, Value};
 
-use crate::screen::{Picture, Region};
+use crate::screen::{Listed, Picture, Region};
 
 const KWIN: &str = "org.kde.KWin";
 const SHOT_PATH: &str = "/org/kde/KWin/ScreenShot2";
@@ -88,7 +88,7 @@ function tell(method, text) {
 function send(w) {
     if (!w.internalId) return;
     const g = w.clientGeometry;
-    tell("Window", JSON.stringify({id: String(w.internalId), pid: w.pid, x: g.x, y: g.y, w: g.width, h: g.height, minimized: w.minimized}));
+    tell("Window", JSON.stringify({id: String(w.internalId), pid: w.pid, title: String(w.caption || ""), x: g.x, y: g.y, w: g.width, h: g.height, minimized: w.minimized}));
 }
 function track(w) {
     send(w);
@@ -107,6 +107,7 @@ tell("Active", workspace.activeWindow ? String(workspace.activeWindow.internalId
 #[derive(Clone, PartialEq, Debug)]
 pub struct Win {
     pub pid: u32,
+    pub title: String,
     pub x: i32,
     pub y: i32,
     pub width: i32,
@@ -122,12 +123,12 @@ pub struct State {
 }
 
 impl State {
-    /// Takes what the script says of a window: `{id, pid, x, y, w, h, minimized}`.
+    /// Takes what the script says of a window: `{id, pid, title, x, y, w, h, minimized}`.
     pub fn window(&mut self, json: &str) {
         let Ok(told) = serde_json::from_str::<Json>(json) else { return };
         let number = |key: &str| told[key].as_f64().map(|n| n.round() as i32);
         let (Some(id), Some(pid), Some(x), Some(y), Some(width), Some(height)) = (told["id"].as_str(), told["pid"].as_u64(), number("x"), number("y"), number("w"), number("h")) else { return };
-        self.windows.insert(id.to_string(), Win { pid: pid as u32, x, y, width, height, minimized: told["minimized"] == true });
+        self.windows.insert(id.to_string(), Win { pid: pid as u32, title: told["title"].as_str().unwrap_or_default().to_string(), x, y, width, height, minimized: told["minimized"] == true });
     }
 
     pub fn gone(&mut self, id: &str) {
@@ -157,6 +158,15 @@ impl State {
 
     pub fn active_pid(&self) -> Option<u32> {
         self.windows.get(self.active.as_ref()?).map(|w| w.pid)
+    }
+
+    /// The windows shown of the processes `wanted` names, as the launcher
+    /// lists windows.
+    pub fn listed(&self, wanted: impl Fn(u32) -> bool) -> Vec<Listed> {
+        let shown = self.windows.values().filter(|w| !w.minimized && w.width > 0 && w.height > 0 && wanted(w.pid));
+        let mut listed: Vec<Listed> = shown.map(|w| Listed { window: 0, pid: w.pid, title: w.title.clone(), area: w.width as u32 * w.height as u32 }).collect();
+        listed.sort_by(|a, b| (a.pid, &a.title).cmp(&(b.pid, &b.title)));
+        listed
     }
 }
 
@@ -300,6 +310,8 @@ fn unload_on_exit() {
 pub struct Kwin {
     conn: Connection,
     state: Arc<Mutex<State>>,
+    /// why the last picture asked for was not taken, if it was not
+    refused: Mutex<Option<String>>,
 }
 
 impl Kwin {
@@ -336,7 +348,7 @@ impl Kwin {
             cleanup();
             return Err(format!("KWin did not run the script: {e}"));
         }
-        Ok(Kwin { conn, state })
+        Ok(Kwin { conn, state, refused: Mutex::new(None) })
     }
 
     /// Has KWin load the script in `file` as `plugin`; gives its number.
@@ -364,8 +376,20 @@ impl Kwin {
         self.active_pid().is_some_and(|active| related(active, pid, &parent_of, &prefix_of))
     }
 
+    /// The windows shown of the processes named.
+    pub fn listed(&self, pids: &[u32]) -> Vec<Listed> {
+        self.state.lock().unwrap().listed(|pid| pids.contains(&pid))
+    }
+
+    /// Why the last picture asked for was not taken: KWin's own words.
+    pub fn refused(&self) -> Option<String> {
+        self.refused.lock().unwrap().clone()
+    }
+
     pub fn grab(&self, id: &str, region: Region) -> Option<Picture> {
-        let shot = capture(&self.conn, Some(id)).ok()?;
+        let shot = capture(&self.conn, Some(id));
+        *self.refused.lock().unwrap() = shot.as_ref().err().cloned();
+        let shot = shot.ok()?;
         let (grey, width, height) = grey(&shot, region)?;
         Some(Picture::from_grey(&grey, width, height))
     }
@@ -433,6 +457,19 @@ mod tests {
         state.gone("b");
         assert_eq!(state.of(|p| p == 7), None);
         assert_eq!(state.placement("b"), None);
+    }
+
+    #[test]
+    fn windows_as_the_launcher_lists_them() {
+        let mut state = State::default();
+        state.window(r#"{"id":"a","pid":7,"title":"Game","x":0,"y":0,"w":800,"h":600,"minimized":false}"#);
+        state.window(r#"{"id":"b","pid":8,"title":"Browser","x":0,"y":0,"w":1920,"h":1080,"minimized":false}"#);
+        state.window(r#"{"id":"c","pid":9,"title":"Hidden","x":0,"y":0,"w":800,"h":600,"minimized":true}"#);
+        let listed = state.listed(|pid| pid == 7 || pid == 9);
+        assert_eq!(listed, [Listed { window: 0, pid: 7, title: "Game".to_string(), area: 480000 }]);
+        // a script that tells no title still tells of the window
+        state.window(&told("d", 7, (10, 10), false));
+        assert_eq!(state.listed(|pid| pid == 7).len(), 2);
     }
 
     #[test]

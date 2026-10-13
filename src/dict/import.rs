@@ -44,7 +44,8 @@ fn term_row(row: &Value) -> Option<(Term, i64)> {
     let row = row.as_array()?;
     let term = text(row, 0);
     let glossary: Vec<Value> = row.get(5)?.as_array()?.iter().filter(|item| !item.is_array() && item["type"] != "image").cloned().collect();
-    (!term.is_empty()).then(|| (Term { term, reading: text(row, 1), tags: text(row, 2), rules: text(row, 3), score: number(row, 4), glossary, term_tags: text(row, 7) }, number(row, 6)))
+    // a row that held nothing but pictures says nothing here
+    (!term.is_empty() && !glossary.is_empty()).then(|| (Term { term, reading: text(row, 1), tags: text(row, 2), rules: text(row, 3), score: number(row, 4), glossary, term_tags: text(row, 7) }, number(row, 6)))
 }
 
 /// How a count of a word is shown: a number, a string, `{value,

@@ -42,6 +42,10 @@ pub trait Screen {
     /// The region of the window as it looks now. `None` while the window
     /// cannot be read, as when it is minimised.
     fn grab(&self, window: &WindowId, region: Region) -> Option<Picture>;
+    /// Why the last picture asked for was not taken, where that is told.
+    fn refused(&self, _: &WindowId) -> Option<String> {
+        None
+    }
     /// How often the window is looked at for the text box to be read.
     fn interval(&self, _: &WindowId) -> Duration {
         Duration::from_millis(150)
@@ -74,7 +78,7 @@ pub struct Picture {
     pub shades: Vec<u8>,
 }
 
-/// A window of the desktop's client list, as the launcher shows it.
+/// A window of the desktop, as the launcher shows it.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Listed {
     pub window: Window,
@@ -286,6 +290,10 @@ impl Screen for KwinScreen {
     fn interval(&self, _: &WindowId) -> Duration {
         kwin::INTERVAL
     }
+
+    fn refused(&self, _: &WindowId) -> Option<String> {
+        self.0.refused()
+    }
 }
 
 /// X11 windows first. A window that is not found there is asked of KWin,
@@ -362,6 +370,23 @@ impl Screen for Both {
             WindowId::Kwin(_) => kwin::INTERVAL,
         }
     }
+
+    fn refused(&self, window: &WindowId) -> Option<String> {
+        match window {
+            WindowId::X11(_) => None,
+            WindowId::Kwin(_) => self.started()?.refused(window),
+        }
+    }
+}
+
+/// The windows KWin shows of the processes named: those of games that Wine
+/// draws with its Wayland driver, which the X server knows nothing of.
+/// Nothing where KWin cannot be asked.
+pub fn wayland_windows(pids: &[u32]) -> Vec<Listed> {
+    if pids.is_empty() || !is_kde() {
+        return Vec::new();
+    }
+    Kwin::shared().map(|kwin| kwin.listed(pids)).unwrap_or_default()
 }
 
 /// The way to ask the desktop about windows. By default the X server, and
