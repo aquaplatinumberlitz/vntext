@@ -1,6 +1,7 @@
 mod dict;
 mod doctor;
 mod engines;
+mod explain;
 mod install;
 mod launcher;
 mod mem;
@@ -336,7 +337,7 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
         Ok(translator) => Some(translator),
         // a key can be entered on the overlay, for the next run
         Err(e) if o.overlay => {
-            hub.publish(serde_json::json!({"type": "notice", "text": format!("Chưa dịch được: {e}. Nhập key bằng nút chìa khoá rồi chạy lại.")}).to_string());
+            hub.publish(explain::event("notice", &e));
             eprintln!("\x1b[33mnot translating: {e}\x1b[0m");
             None
         }
@@ -503,7 +504,7 @@ fn translator_worker(t: translate::Translator, o_to: String, engine: Arc<dyn Eng
                     translate::set_at_work(new.service);
                     client = new;
                 }
-                Err(e) => hub.publish(serde_json::json!({"type": "notice", "text": format!("Chưa đổi được nguồn dịch: {e}")}).to_string()),
+                Err(e) => hub.publish(explain::event("notice", &e)),
             }
         }
         match jobs.recv_timeout(TICK) {
@@ -548,7 +549,7 @@ fn translator_worker(t: translate::Translator, o_to: String, engine: Arc<dyn Eng
         }
         let context: Vec<String> = (index.saturating_sub(CONTEXT)..index).map(|i| unit(i).text).collect();
         let only = urgent.then(|| unit(index));
-        let (client, t, fetching) = (client.clone(), t.clone(), fetching.clone());
+        let (client, t, fetching, hub) = (client.clone(), t.clone(), fetching.clone(), hub.clone());
         thread::spawn(move || {
             let mut result = client.translate(&context, &missing).map(|tr| (missing, tr));
             if let Err(e) = result.as_ref().map_err(String::clone) {
@@ -563,6 +564,9 @@ fn translator_worker(t: translate::Translator, o_to: String, engine: Arc<dyn Eng
                         Err(e) => eprintln!("\x1b[33mGoogle failed as well: {e}\x1b[0m"),
                     }
                 }
+                // said beside the passage if something has translated it, else in its place
+                let kind = if urgent && result.is_err() { "notice" } else { "hint" };
+                hub.publish(explain::event(kind, &e));
                 if e.contains("429") {
                     thread::sleep(Duration::from_secs(30));
                 }

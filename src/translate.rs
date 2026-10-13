@@ -140,10 +140,10 @@ pub fn save_setup(setup: &Setup) -> std::io::Result<()> {
 pub fn choose(service: Service) -> Result<(), String> {
     let (setup, label) = (setup(service), service.known().label);
     if service.keyed() && setup.key.is_empty() {
-        return Err(format!("{label} chưa có API key. Bấm nút ổ khoá để nhập."));
+        return Err(format!("{label} chưa có API key. Mở bánh răng, tab Dịch để nhập."));
     }
     if setup.model.is_empty() && !matches!(service, Service::Gemini | Service::Google) {
-        return Err(format!("{label} chưa có tên model. Bấm nút ổ khoá để ghi."));
+        return Err(format!("{label} chưa có tên model. Mở bánh răng, tab Dịch để ghi."));
     }
     let mut all = setups();
     all["use"] = json!(service.known().id);

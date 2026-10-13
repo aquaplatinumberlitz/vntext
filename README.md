@@ -106,13 +106,17 @@ Game chưa có profile thì đọc bằng ảnh chụp khung thoại:
 
 Dải nằm ngay dưới cửa sổ game (hết chỗ thì ở mép trên bên trong cửa sổ) và chỉ hiện khi cửa sổ game đang được chọn. Trên dải có tên người nói, câu thoại, nhãn nguồn (`ENGINE` là lấy từ script qua profile, `OCR` là đọc từ ảnh) và nút ghi nguồn đang dịch; bấm nút đó để đổi nguồn dịch.
 
-Cụm nút bên phải cửa sổ game, từ trên xuống: ẩn/hiện dải; mở khoá dải (kéo `⠿` để dời, kéo `↔` để đổi bề rộng, lăn chuột để đổi cỡ chữ, quét chữ để chép); đổi giữa bản dịch, câu Nhật, cả hai; chữ to, chữ nhỏ; câu trước, câu sau; đưa về thiết lập ban đầu; chép câu đang hiện; bật/tắt OCR; khoanh lại khung thoại; thiết lập nguồn dịch. Thiết lập của dải lưu theo từng game trong `~/.config/vntext/overlay.json`.
+Cụm nút bên phải cửa sổ game, từ trên xuống, có sáu nút: ẩn/hiện dải; mở khoá dải (kéo `⠿` để dời, kéo `↔` để đổi bề rộng, quét chữ để chép); chép câu đang hiện; đổi giữa bản dịch, câu Nhật, cả hai; bật/tắt OCR; và bánh răng mở hộp thiết lập. Lăn chuột trên dải (khi dải nhận chuột: đang mở khoá hoặc đang hiện chữ Nhật) để xem lại câu cũ; dải ghi "ENGINE · 3/40" khi đang xem câu cũ, và có câu mới thì quay về câu mới nhất.
+
+Hộp thiết lập có bốn tab: **Hiển thị** (cỡ chữ, độ mờ nền, màu chữ, chế độ Dịch/Nhật/cả hai, đặt lại vị trí và bề rộng), **Dịch** (nguồn dịch, key, model), **Từ điển** (xem [Từ điển](#từ-điển)), **OCR** (bật/tắt đọc bằng ảnh, khoanh lại khung thoại). Thiết lập của dải lưu theo từng game trong `~/.config/vntext/overlay.json`; file cũ thiếu độ mờ và màu vẫn đọc được. Lần đầu dải hiện trên máy, nó hiện ba dòng chỉ dẫn thay cho câu thoại cho tới khi bấm "Đã hiểu" (đánh dấu bằng khoá `@intro` trong cùng file).
+
+Lỗi hiện bằng lời thường kèm nút việc nên làm: hết hạn mức (429) thì có nút chuyển sang Google; key sai thì mở tab Dịch; mất mạng thì nói là mất mạng; Yomitan không trả lời thì mở tab Từ điển; game không có cửa sổ X11 hay bị từ chối đọc bộ nhớ thì nói rõ cách xử lý. Chuỗi lỗi thô vẫn in ra terminal.
 
 Ở chế độ chỉ hiện bản dịch, click xuyên qua dải xuống bên dưới. Khi dải hiện chữ Nhật, rê chuột lên một từ là nghĩa của từ đó hiện ra trong khung bên cạnh. Nghĩa lấy từ từ điển đã nhập vào tool, hoặc từ Yomitan của trình duyệt.
 
 ### Từ điển
 
-Tool không tự tải từ điển nào. Bấm "Tải từ điển" ở tab "Từ điển" của hộp cài đặt (nút ổ khoá trên cụm nút) để mở <https://yomitan.wiki/dictionaries/> bằng trình duyệt, tải file zip về, rồi "Thêm từ điển…" (chọn nhiều file được) hoặc kéo thả file zip vào tab đó. Không cần giải nén. Hỗ trợ từ điển của Yomitan định dạng bản 3: nghĩa, tần suất (`freq`) và nhãn; ảnh và dữ liệu cao độ/IPA bị bỏ qua. Nhập trùng tên thì thay bản cũ. Đang nhập thì có thanh tiến độ và nút huỷ; huỷ hay lỗi thì không đổi gì.
+Tool không tự tải từ điển nào. Bấm "Tải từ điển" ở tab "Từ điển" của hộp thiết lập (bánh răng trên cụm nút) để mở <https://yomitan.wiki/dictionaries/> bằng trình duyệt, tải file zip về, rồi "Thêm từ điển…" (chọn nhiều file được) hoặc kéo thả file zip vào tab đó. Không cần giải nén. Hỗ trợ từ điển của Yomitan định dạng bản 3: nghĩa, tần suất (`freq`) và nhãn; ảnh và dữ liệu cao độ/IPA bị bỏ qua. Nhập trùng tên thì thay bản cũ. Đang nhập thì có thanh tiến độ và nút huỷ; huỷ hay lỗi thì không đổi gì.
 
 Mỗi từ điển có công tắc bật/tắt, nút lên/xuống để đổi thứ tự (từ điển trước hiện nghĩa trước) và nút xoá. Kho nằm ở `~/.local/share/vntext/dict.sqlite`.
 
@@ -135,7 +139,7 @@ Chữ chia (食べた, 書いていない…) được đưa về dạng gốc b
 | Server nói kiểu OpenAI (Ollama, LM Studio...) | `local` | không bắt buộc | phải ghi |
 | Google Dịch | `google` | không cần | |
 
-Key, model và địa chỉ server cũng nhập được trên dải nổi (nút ổ khoá, có nút tải danh sách model của nguồn), lưu ở `~/.config/vntext/translate.json`. Tool đang chạy đổi nguồn ngay khi lưu.
+Key, model và địa chỉ server cũng nhập được trên dải nổi (bánh răng, tab Dịch, có nút tải danh sách model của nguồn), lưu ở `~/.config/vntext/translate.json`. Tool đang chạy đổi nguồn ngay khi lưu.
 
 Google Dịch đi qua cổng không chính thức của tiện ích trình duyệt Google, dịch từng câu rời không có ngữ cảnh, và bản dịch của nó không lưu vào cache. Nó tự thay vào khi nguồn đã chọn thiếu key, và cho riêng câu đang đọc khi nguồn đã chọn lỗi. Trong các nguồn còn lại, mới chỉ Gemini được chạy thử.
 
@@ -254,7 +258,8 @@ src/
   translate.rs       Các nguồn dịch (Gemini, OpenAI, DeepSeek, Claude, server local, Google), có cache
   ocr.rs             Đọc khung thoại từ ảnh chụp qua Gemini
   screen.rs          Liệt kê, tìm và chụp cửa sổ game qua X11, nén ảnh
-  overlay.rs         Dải nổi và cụm nút cạnh cửa sổ game (GTK4, layer-shell)
+  overlay.rs         Dải nổi, cụm nút và hộp thiết lập cạnh cửa sổ game (GTK4, layer-shell)
+  explain.rs         Đổi chuỗi lỗi thô thành câu tiếng Việt và việc nên làm
   yomitan.rs         Tra từ qua API của Yomitan; đổi nội dung từ điển (structured content) thành markup cho popup
   dict/
     mod.rs           Các chuỗi mà từ điển có thể liệt kê cho một đoạn chữ (`candidates`)

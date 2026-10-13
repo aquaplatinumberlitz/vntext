@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::screen::{Picture, Region, Screen};
-use crate::{die, mem, overlay, translate, web, Opts};
+use crate::{die, explain, mem, overlay, translate, web, Opts};
 
 const TICK: Duration = Duration::from_millis(150);
 /// Two pictures in a row that differ in less than this share of their
@@ -141,13 +141,20 @@ fn notice(hub: &web::Hub, text: &str) {
     hub.publish(serde_json::json!({"type": "notice", "text": text}).to_string());
 }
 
+/// Tells the reader what went wrong in plain words on the strip; the raw
+/// error is in the terminal.
+fn trouble(hub: &web::Hub, raw: &str) {
+    eprintln!("\x1b[33m{raw}\x1b[0m");
+    hub.publish(explain::event("notice", raw));
+}
+
 /// Starts reading the game's text box from pictures, in place of whoever
 /// read it before. It goes on until `control` is stopped or given to another.
 pub fn spawn(pid: u32, settings: Settings, hub: web::Hub, control: Arc<Control>) {
     let reader = control.begin();
     thread::spawn(move || {
         if let Err(e) = read(pid, &settings, &hub, &control, reader) {
-            notice(&hub, &format!("OCR: {e}"));
+            trouble(&hub, &format!("OCR: {e}"));
             if control.wants(reader) {
                 control.stop();
             }
@@ -198,7 +205,7 @@ fn read(pid: u32, o: &Settings, hub: &web::Hub, control: &Control, reader: u64) 
         let shown = match translator.client.read(&png, &earlier, o.translate) {
             Ok(shown) => shown,
             Err(e) => {
-                notice(hub, &format!("OCR: {e}"));
+                trouble(hub, &format!("OCR: {e}"));
                 thread::sleep(RETRY_AFTER);
                 continue;
             }

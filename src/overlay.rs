@@ -22,6 +22,7 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use serde_json::{json, Value};
 
 use crate::dict::import;
+use crate::explain::Action;
 use crate::dict::lookup::{self, Source, Trouble};
 use crate::dict::store::{Info, Store};
 use crate::screen::{Region, Screen};
@@ -39,6 +40,15 @@ const PENDING: &str = "…";
 const KEPT: usize = 200;
 const FONT: i32 = 22;
 const FONTS: std::ops::RangeInclusive<i32> = 10..=72;
+/// How opaque the strip's background may be set, and how it starts.
+const OPACITIES: std::ops::RangeInclusive<f64> = 0.2..=1.0;
+const OPACITY: f64 = 0.72;
+/// Colours of the text to choose from, and the one it starts in.
+const COLOURS: [&str; 6] = ["#ffffff", "#ffe08a", "#9ecbff", "#a6e3a1", "#f5a9c8", "#ffb27a"];
+const COLOUR: &str = COLOURS[0];
+/// Where the file of looks says that the first-time help has been read; no
+/// game is named that.
+const INTRO_KEY: &str = "@intro";
 const NARROWEST: i32 = 200;
 /// How much of the text from the pointer on is looked up: the longest word
 /// it starts with is found.
@@ -55,7 +65,7 @@ const STYLE: &str = "
 window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
 .vntext scrollbar slider, .vntext-ask scrollbar slider { min-width: 6px; min-height: 6px; margin: 0; border: none; border-radius: 3px; background: rgba(255, 255, 255, 0.35); }
 .vntext scrollbar, .vntext-ask scrollbar { background: none; border: none; }
-.vntext .strip { background: rgba(0, 0, 0, 0.72); border-radius: 10px; padding: 8px 14px; }
+.vntext .strip { border-radius: 10px; padding: 8px 14px; }
 .vntext .strip label { color: white; text-shadow: 0 0 3px black, 0 0 3px black; }
 .vntext .strip label.speaker { color: #e0a458; font-weight: bold; }
 .vntext .strip label.translation { color: #9ecbff; }
@@ -67,6 +77,12 @@ window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
     border-radius: 4px; background: rgba(255, 255, 255, 0.16); }
 .vntext .strip button.service:hover { background: rgba(255, 255, 255, 0.35); }
 .vntext .strip button.service label { font-size: 10px; color: white; text-shadow: none; }
+.vntext .strip button.hint { min-height: 0; min-width: 0; padding: 2px 8px; border: none; box-shadow: none; border-radius: 4px; background: #e0a458; }
+.vntext .strip button.hint label { font-size: 11px; color: black; text-shadow: none; }
+.vntext .strip label.hinted { font-size: 12px; color: #e0a458; }
+.vntext .strip label.intro { color: white; }
+.vntext .strip button.understood { min-height: 0; padding: 2px 10px; border: none; box-shadow: none; border-radius: 4px; background: #e0a458; }
+.vntext .strip button.understood label { font-size: 12px; color: black; text-shadow: none; }
 .vntext .strip label.grip { color: #e0a458; padding: 0 8px; }
 .vntext .meaning { background: rgba(30, 31, 40, 0.97); border: 1px solid #4a4c5c; border-radius: 8px; padding: 8px 10px; }
 .vntext .meaning scrolledwindow, .vntext .meaning viewport { background: none; }
@@ -104,6 +120,8 @@ window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
 .vntext-ask .box button.tab.on label { color: black; }
 .vntext-ask list, .vntext-ask row { background: #2c2c2c; }
 .vntext-ask scrolledwindow, .vntext-ask viewport { background: none; }
+.vntext-ask button.swatch { min-width: 22px; min-height: 22px; padding: 0; border: 2px solid #1e1e1e; border-radius: 11px; }
+.vntext-ask button.swatch.on { border-color: white; }
 .vntext-ask button.icon { background: #333; padding: 3px 6px; }
 .vntext-ask button.tab { background: #333; padding: 3px 9px; }
 .vntext-ask button.tab label { color: white; }
@@ -144,6 +162,15 @@ impl Mode {
         Mode::ALL.iter().find(|m| m.0 == self).unwrap().2
     }
 
+    /// What the mode is called where there is room to say it.
+    fn name(self) -> &'static str {
+        match self {
+            Mode::Translation => "Bản dịch",
+            Mode::Japanese => "Tiếng Nhật",
+            Mode::Both => "Cả hai",
+        }
+    }
+
     fn next(self) -> Mode {
         let at = Mode::ALL.iter().position(|m| m.0 == self).unwrap();
         Mode::ALL[(at + 1) % Mode::ALL.len()].0
@@ -154,6 +181,10 @@ impl Mode {
 #[derive(Clone, PartialEq, Debug)]
 struct Look {
     font: i32,
+    /// how opaque the background of the strip is
+    opacity: f64,
+    /// the colour of its text, as `#rrggbb`
+    colour: String,
     mode: Mode,
     /// where the strip is from the top left corner of the game's window and
     /// how wide; `None` to have it put by the window
@@ -163,7 +194,7 @@ struct Look {
 
 impl Default for Look {
     fn default() -> Look {
-        Look { font: FONT, mode: Mode::Translation, place: None, hidden: false }
+        Look { font: FONT, opacity: OPACITY, colour: COLOUR.to_string(), mode: Mode::Translation, place: None, hidden: false }
     }
 }
 
@@ -173,6 +204,8 @@ impl Look {
         let place = saved["place"].as_array().and_then(|p| Some((number(p.first()?)?, number(p.get(1)?)?, number(p.get(2)?)?)));
         Look {
             font: number(&saved["font"]).filter(|f| FONTS.contains(f)).unwrap_or(FONT),
+            opacity: saved["opacity"].as_f64().filter(|o| OPACITIES.contains(o)).unwrap_or(OPACITY),
+            colour: saved["colour"].as_str().filter(|c| is_colour(c)).unwrap_or(COLOUR).to_string(),
             mode: Mode::ALL.iter().find(|m| saved["mode"] == m.1).map_or(Mode::Translation, |m| m.0),
             place: place.filter(|p| p.2 >= NARROWEST),
             hidden: saved["hidden"] == true,
@@ -181,8 +214,25 @@ impl Look {
 
     fn to_json(&self) -> Value {
         let mode = Mode::ALL.iter().find(|m| m.0 == self.mode).unwrap().1;
-        json!({"font": self.font, "mode": mode, "place": self.place.map(|p| [p.0, p.1, p.2]), "hidden": self.hidden})
+        json!({"font": self.font, "opacity": self.opacity, "colour": self.colour, "mode": mode, "place": self.place.map(|p| [p.0, p.1, p.2]), "hidden": self.hidden})
     }
+}
+
+/// Whether a text is a colour as `#rrggbb`, the only way that one is let into the style.
+fn is_colour(text: &str) -> bool {
+    text.len() == 7 && text.starts_with('#') && text[1..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The style of the strip for a look, in two parts. The first, its background
+/// and the size of its text, is given up to whatever `STYLE` says of a part
+/// (a provider loaded later wins over an earlier one whatever the selectors,
+/// so this one is loaded before). The second, the colour of the message,
+/// wins over it.
+fn strip_style(look: &Look) -> (String, String) {
+    (
+        format!(".vntext .strip {{ background: rgba(0, 0, 0, {:.2}); }} .vntext .strip label {{ font-size: {}px; }}", look.opacity, look.font),
+        format!(".vntext .strip label.japanese, .vntext .strip label.alone {{ color: {}; }}", look.colour),
+    )
 }
 
 /// The file of looks: a JSON object with one look for each game.
@@ -193,6 +243,21 @@ fn looks_file() -> PathBuf {
 fn saved_looks() -> Value {
     let file = std::fs::read_to_string(looks_file()).unwrap_or_default();
     serde_json::from_str(&file).ok().filter(Value::is_object).unwrap_or_else(|| json!({}))
+}
+
+/// Whether the file of looks says that the first-time help was read.
+fn intro_read(looks: &Value) -> bool {
+    looks[INTRO_KEY] == true
+}
+
+fn save_intro_read() {
+    let mut looks = saved_looks();
+    looks[INTRO_KEY] = json!(true);
+    let file = looks_file();
+    let _ = std::fs::create_dir_all(file.parent().unwrap());
+    if let Err(e) = std::fs::write(&file, format!("{looks:#}\n")) {
+        eprintln!("cannot save the overlay's look to {}: {e}", file.display());
+    }
 }
 
 fn save_look(game: &str, look: &Look) {
@@ -217,13 +282,22 @@ struct Message {
     google: bool,
 }
 
+/// Something to tell the reader, and what they may do about it.
+#[derive(Clone, PartialEq, Debug)]
+struct Said {
+    text: String,
+    action: Option<Action>,
+}
+
 /// The messages the game has shown and the one the strip is on.
 #[derive(Default)]
 struct Shown {
     messages: Vec<Message>,
     at: usize,
     /// said in place of a message until the next one comes
-    notice: Option<String>,
+    notice: Option<Said>,
+    /// said beside the message, which is still shown
+    hint: Option<Said>,
 }
 
 impl Shown {
@@ -235,28 +309,35 @@ impl Shown {
         let text = |v: &Value| v.as_str().map(str::to_string);
         match event["type"].as_str() {
             Some("message") => {
-                // the strip moves on with the game unless the reader has stepped back
-                let follows = self.at + 1 >= self.messages.len();
                 let lines = event["lines"].as_array().into_iter().flatten().filter_map(text).collect();
                 let pending = event["translating"] == true;
                 let pictured = event["source"] == "ocr";
                 self.messages.push(Message { seq, name: text(&event["name"]), lines, translation: None, pending, pictured, google: false });
                 if self.messages.len() > KEPT {
                     self.messages.remove(0);
-                    self.at = self.at.saturating_sub(1);
-                }
-                if follows {
-                    self.at = self.messages.len() - 1;
-                }
+                    }
+                // a new message brings the strip back from the old ones
+                self.at = self.messages.len() - 1;
                 self.notice = None;
+                self.hint = None;
             }
             Some("translation") => {
                 if let Some(message) = self.messages.iter_mut().rev().find(|m| m.seq == seq) {
                     (message.translation, message.pending) = (text(&event["tr"]), false);
                     message.google = event["via"] == "google";
                 }
+                // what failed before has been made good
+                self.notice = None;
+                self.hint = None;
             }
-            Some("notice") => self.notice = text(&event["text"]),
+            Some(kind @ ("notice" | "hint")) => {
+                let said = text(&event["text"]).map(|text| Said { text, action: event["action"].as_str().and_then(Action::named) });
+                if kind == "notice" {
+                    self.notice = said;
+                } else {
+                    self.hint = said;
+                }
+            }
             _ => {}
         }
     }
@@ -270,7 +351,26 @@ impl Shown {
     fn source(&self) -> Option<String> {
         let message = self.messages.get(self.at).filter(|_| self.notice.is_none())?;
         let text = if message.pictured { "OCR" } else { "ENGINE" };
-        Some(text.to_string())
+        Some(match self.old() {
+            Some((at, of)) => format!("{text} · {at}/{of}"),
+            None => text.to_string(),
+        })
+    }
+
+    /// The message shown among those there are, while it is an old one.
+    fn old(&self) -> Option<(usize, usize)> {
+        (self.at + 1 < self.messages.len()).then_some((self.at + 1, self.messages.len()))
+    }
+
+    /// What is said beside the message: a hint, or the button of a notice,
+    /// and what the button does.
+    fn offered(&self) -> Option<(String, Option<Action>)> {
+        match (&self.notice, &self.hint) {
+            (Some(Said { action: Some(action), .. }), _) => Some((String::new(), Some(*action))),
+            (Some(_), _) => None,
+            (None, Some(hint)) => Some((hint.text.clone(), hint.action)),
+            (None, None) => None,
+        }
     }
 
     /// Whether Google Translate made the translation shown.
@@ -294,7 +394,7 @@ impl Shown {
     /// for the translation is only a placeholder.
     fn texts(&self, mode: Mode) -> (Option<String>, Option<String>, bool) {
         if let Some(notice) = &self.notice {
-            return (None, Some(notice.clone()), true);
+            return (None, Some(notice.text.clone()), true);
         }
         let Some(message) = self.messages.get(self.at) else { return (None, None, false) };
         let japanese = message.lines.join("\n");
@@ -322,6 +422,8 @@ struct Ui {
     picking: bool,
     /// pictures are to be read as soon as the game's window is found
     reading: bool,
+    /// the help for the first time is on the strip, in place of messages
+    intro: bool,
     /// the selection as it was a tick ago, and the one last copied
     selection: Option<(i32, i32)>,
     copied: Option<(i32, i32)>,
@@ -346,7 +448,9 @@ struct Overlay {
     hub: web::Hub,
     pictures: Arc<ocr::Control>,
     settings: ocr::Settings,
-    font: gtk4::CssProvider,
+    /// the background and the size of the text of the strip, and the colour of the message
+    sizes: gtk4::CssProvider,
+    look: gtk4::CssProvider,
     strip: gtk4::Window,
     content: gtk4::Box,
     /// the name of who speaks, set apart from what is said
@@ -357,6 +461,12 @@ struct Overlay {
     source: gtk4::Label,
     /// says who translates, and lets another be chosen
     service: gtk4::Button,
+    /// the help for the first time
+    intro: gtk4::Box,
+    /// what is said beside the message, and the button that does something about it
+    hinted: gtk4::Label,
+    hint: gtk4::Button,
+    offer: Cell<Option<Action>>,
     grips: [gtk4::Label; 2],
     /// the meaning of the word under the pointer, from the dictionaries
     popup: gtk4::Window,
@@ -487,12 +597,14 @@ fn word(entry: &yomitan::Entry) -> gtk4::Box {
 /// A tab of the settings window.
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
+    Display,
     Translate,
     Dictionary,
+    Ocr,
 }
 
 impl Tab {
-    const ALL: [(Tab, &'static str, &'static str); 2] = [(Tab::Translate, "translate", "Dịch"), (Tab::Dictionary, "dictionary", "Từ điển")];
+    const ALL: [(Tab, &'static str, &'static str); 4] = [(Tab::Display, "display", "Hiển thị"), (Tab::Translate, "translate", "Dịch"), (Tab::Dictionary, "dictionary", "Từ điển"), (Tab::Ocr, "ocr", "OCR")];
 
     fn id(self) -> &'static str {
         Tab::ALL.iter().find(|t| t.0 == self).unwrap().1
@@ -767,7 +879,22 @@ impl Overlay {
         (ui.hover, ui.asked) = (None, None);
         self.japanese.set_attributes(None);
         self.popup.set_visible(false);
-        self.font.load_from_data(&format!(".vntext .strip label {{ font-size: {}px; }}", ui.look.font));
+        let (sizes, colour) = strip_style(&ui.look);
+        self.sizes.load_from_data(&sizes);
+        self.look.load_from_data(&colour);
+        // the first-time help takes the place of what the game says
+        self.intro.set_visible(ui.intro);
+        if ui.intro {
+            [&self.speaker, &self.japanese, &self.translation, &self.source].iter().for_each(|l| l.set_visible(false));
+        }
+        let offered = ui.shown.offered().filter(|_| !ui.intro);
+        self.offer.set(offered.as_ref().and_then(|o| o.1));
+        self.hinted.set_visible(offered.as_ref().is_some_and(|o| !o.0.is_empty()));
+        self.hinted.set_text(offered.as_ref().map_or("", |o| o.0.as_str()));
+        self.hint.set_visible(self.offer.get().is_some());
+        if let Some(action) = self.offer.get() {
+            self.hint.set_label(action.label());
+        }
         self.japanese.set_selectable(!ui.locked);
         self.grips.iter().for_each(|grip| grip.set_visible(!ui.locked));
         self.mode_now.set_text(ui.look.mode.label());
@@ -806,19 +933,23 @@ impl Overlay {
         self.strip.set_margin(Edge::Left, strip.0.max(0));
         self.strip.set_margin(Edge::Top, strip.1.max(0));
         let (japanese, translation, _) = ui.shown.texts(ui.look.mode);
-        self.strip.set_visible(!ui.look.hidden && (japanese.is_some() || translation.is_some()));
+        self.strip.set_visible(!ui.look.hidden && (japanese.is_some() || translation.is_some() || ui.intro));
         if let Some(surface) = self.strip.surface() {
             // Locked, the strip lets the pointer through, unless it shows
             // Japanese: then words are looked up under the pointer.
             let all = cairo::RectangleInt::new(0, 0, self.strip.width(), self.strip.height());
-            let through = ui.locked && japanese.is_none();
-            // ...save for the button that says who translates
-            let button = self.service.compute_bounds(&self.strip).filter(|_| self.service.is_visible());
-            let button = button.map(|b| cairo::RectangleInt::new(b.x() as i32, b.y() as i32, b.width().ceil() as i32, b.height().ceil() as i32));
-            let taking = match (through, button) {
-                (false, _) => cairo::Region::create_rectangle(&all),
-                (true, Some(button)) => cairo::Region::create_rectangle(&button),
-                (true, None) => cairo::Region::create(),
+            let through = ui.locked && japanese.is_none() && !ui.intro;
+            // ...save for the buttons that say who translates and offer a remedy
+            let taking = if through {
+                let taking = cairo::Region::create();
+                for button in [&self.service, &self.hint] {
+                    if let Some(b) = button.compute_bounds(&self.strip).filter(|_| button.is_visible()) {
+                        let _ = taking.union_rectangle(&cairo::RectangleInt::new(b.x() as i32, b.y() as i32, b.width().ceil() as i32, b.height().ceil() as i32));
+                    }
+                }
+                taking
+            } else {
+                cairo::Region::create_rectangle(&all)
             };
             surface.set_input_region(Some(&taking));
         }
@@ -940,8 +1071,15 @@ impl Overlay {
                 self.meaning.append(&open);
             }
             Err(Trouble::Yomitan(e)) => {
-                let how = "Mở Firefox, vào Yomitan Settings, bật Advanced ở góc dưới trái, rồi bật General → Enable Yomitan API.";
-                self.meaning.append(&said("gloss", &format!("<span foreground='#e0a458'>Chưa hỏi được Yomitan</span>\n{}\n{how}", yomitan::escape(&e))));
+                eprintln!("\x1b[33mYomitan: {e}\x1b[0m");
+                let how = "Mở Firefox, vào Yomitan Settings, bật Advanced ở góc dưới trái, rồi bật General → Enable Yomitan API. Hoặc dùng từ điển nhập vào tool.";
+                self.meaning.append(&said("gloss", &format!("<span foreground='#e0a458'>Chưa hỏi được Yomitan</span>\n{how}")));
+                let open = gtk4::Button::with_label("Mở tab Từ điển");
+                open.set_halign(gtk4::Align::Start);
+                open.set_focusable(false);
+                let overlay = self.clone();
+                open.connect_clicked(move |_| overlay.set_up(Tab::Dictionary));
+                self.meaning.append(&open);
             }
             Err(Trouble::Store(e)) => {
                 self.meaning.append(&said("gloss", &format!("<span foreground='#e0a458'>Chưa tra được trong kho từ điển</span>\n{}", yomitan::escape(&e))));
@@ -1009,6 +1147,130 @@ impl Overlay {
         menu.set_margin(Edge::Left, (strip.0 + x).max(0));
         menu.set_margin(Edge::Top, (strip.1 + y).max(0));
         menu.set_visible(true);
+    }
+
+    /// Changes how the strip looks, keeps that for the game, and shows it.
+    fn restyle(self: &Rc<Self>, change: impl FnOnce(&mut Look)) {
+        change(&mut self.ui.borrow_mut().look);
+        self.save();
+        self.render();
+        self.place();
+    }
+
+    /// Does what a hint or notice offers.
+    fn act(self: &Rc<Self>, action: Action) {
+        match action {
+            Action::Google => {
+                let told = match translate::choose(Service::Google) {
+                    Ok(()) => "Từ câu sau dịch bằng Google Dịch.".to_string(),
+                    Err(e) => e,
+                };
+                self.hub.publish(json!({"type": "notice", "text": told}).to_string());
+            }
+            Action::Translate => self.set_up(Tab::Translate),
+            Action::Dictionary => self.set_up(Tab::Dictionary),
+        }
+    }
+
+    /// The tab of how the strip looks: the size and colour of its text, how
+    /// opaque it is, which of a message it shows, and where it is.
+    fn display_page(self: &Rc<Self>) -> gtk4::Box {
+        let page = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+        let look = self.ui.borrow().look.clone();
+        let row = |name: &str, widget: &gtk4::Widget| {
+            let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+            let named = gtk4::Label::new(Some(name));
+            named.set_xalign(0.0);
+            named.set_hexpand(true);
+            row.append(&named);
+            row.append(widget);
+            page.append(&row);
+        };
+        let font = gtk4::SpinButton::with_range(*FONTS.start() as f64, *FONTS.end() as f64, 1.0);
+        font.set_value(look.font as f64);
+        let overlay = self.clone();
+        font.connect_value_changed(move |font| overlay.restyle(|l| l.font = font.value() as i32));
+        row("Cỡ chữ", font.upcast_ref());
+
+        let opacity = gtk4::Scale::with_range(gtk4::Orientation::Horizontal, *OPACITIES.start(), *OPACITIES.end(), 0.05);
+        opacity.set_value(look.opacity);
+        opacity.set_width_request(180);
+        let overlay = self.clone();
+        opacity.connect_value_changed(move |opacity| overlay.restyle(|l| l.opacity = opacity.value().clamp(*OPACITIES.start(), *OPACITIES.end())));
+        row("Độ mờ nền", opacity.upcast_ref());
+
+        let colours = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+        let swatches: Rc<RefCell<Vec<(&str, gtk4::Button)>>> = Rc::default();
+        for (at, colour) in COLOURS.into_iter().enumerate() {
+            let swatch = gtk4::Button::new();
+            // each swatch is in the colour it chooses
+            swatch.add_css_class("swatch");
+            swatch.add_css_class(&format!("swatch{at}"));
+            swatch.set_focusable(false);
+            switch(&swatch, look.colour == colour);
+            let (overlay, all) = (self.clone(), swatches.clone());
+            swatch.connect_clicked(move |_| {
+                all.borrow().iter().for_each(|(c, b)| switch(b, *c == colour));
+                overlay.restyle(|l| l.colour = colour.to_string());
+            });
+            colours.append(&swatch);
+            swatches.borrow_mut().push((colour, swatch));
+        }
+        row("Màu chữ", colours.upcast_ref());
+
+        let modes = gtk4::DropDown::from_strings(&Mode::ALL.map(|m| m.0.name()));
+        modes.set_selected(Mode::ALL.iter().position(|m| m.0 == look.mode).unwrap_or(0) as u32);
+        let overlay = self.clone();
+        modes.connect_selected_notify(move |modes| overlay.restyle(|l| l.mode = Mode::ALL.get(modes.selected() as usize).map_or(Mode::Translation, |m| m.0)));
+        row("Hiện", modes.upcast_ref());
+
+        let reset = gtk4::Button::with_label("Đặt lại vị trí và bề rộng");
+        reset.set_halign(gtk4::Align::Start);
+        let overlay = self.clone();
+        reset.connect_clicked(move |_| overlay.restyle(|l| l.place = None));
+        page.append(&reset);
+        page
+    }
+
+    /// The tab of reading the text box from pictures.
+    fn ocr_page(self: &Rc<Self>, window: &gtk4::Window) -> gtk4::Box {
+        let page = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+        let about = gtk4::Label::new(Some("OCR đọc khung thoại từ ảnh chụp game, cho game chưa có profile. Cần key Gemini (tab Dịch)."));
+        about.set_xalign(0.0);
+        about.set_wrap(true);
+        about.set_max_width_chars(48);
+        page.append(&about);
+        let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+        let named = gtk4::Label::new(Some("Đọc bằng ảnh chụp"));
+        named.set_xalign(0.0);
+        named.set_hexpand(true);
+        let on = gtk4::Switch::new();
+        on.set_active(self.pictures.on());
+        let (overlay, closing) = (self.clone(), window.clone());
+        on.connect_active_notify(move |on| {
+            if on.is_active() == overlay.pictures.on() {
+                return;
+            }
+            if on.is_active() {
+                // the box may have to be pointed out first, over the game
+                closing.destroy();
+                overlay.read_pictures();
+            } else {
+                overlay.pictures.stop();
+            }
+        });
+        row.append(&named);
+        row.append(&on);
+        page.append(&row);
+        let pick = gtk4::Button::with_label("Khoanh lại khung thoại");
+        pick.set_halign(gtk4::Align::Start);
+        let (overlay, closing) = (self.clone(), window.clone());
+        pick.connect_clicked(move |_| {
+            closing.destroy();
+            overlay.pick(false);
+        });
+        page.append(&pick);
+        page
     }
 
     /// Lists the services by the strip for the reader to choose who
@@ -1236,8 +1498,10 @@ impl Overlay {
         save.set_halign(gtk4::Align::End);
         content.append(&save);
         let pages = gtk4::Stack::new();
+        pages.add_named(&self.display_page(), Some(Tab::Display.id()));
         pages.add_named(&content, Some(Tab::Translate.id()));
         pages.add_named(&dictionaries(&window), Some(Tab::Dictionary.id()));
+        pages.add_named(&self.ocr_page(&window), Some(Tab::Ocr.id()));
         let outer = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
         outer.add_css_class("box");
         let tabbed = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
@@ -1399,11 +1663,13 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
     }
     let display = gdk::Display::default().ok_or("no display")?;
     let style = gtk4::CssProvider::new();
-    style.load_from_data(STYLE);
-    let font = gtk4::CssProvider::new();
-    for provider in [&style, &font] {
-        gtk4::style_context_add_provider_for_display(&display, provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
-    }
+    let swatches: String = COLOURS.iter().enumerate().map(|(at, c)| format!(".vntext-ask button.swatch{at} {{ background: {c}; }}\n")).collect();
+    style.load_from_data(&format!("{STYLE}{swatches}"));
+    let look_style = gtk4::CssProvider::new();
+    let sizes = gtk4::CssProvider::new();
+    gtk4::style_context_add_provider_for_display(&display, &sizes, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    gtk4::style_context_add_provider_for_display(&display, &style, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    gtk4::style_context_add_provider_for_display(&display, &look_style, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
     // the strip: a grip to move it by, the text, a grip to make it wider
     let strip = floating("vntext");
@@ -1415,6 +1681,27 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
     text.append(&speaker);
     text.append(&japanese);
     text.append(&translation);
+    // what is said beside the message, with a button to do something about it
+    let (hinted, hint) = (label("hinted"), gtk4::Button::new());
+    hint.add_css_class("hint");
+    hint.set_focusable(false);
+    let hints = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    hints.append(&hinted);
+    hints.append(&hint);
+    text.append(&hints);
+    // the first time: three lines of help in place of the message
+    let intro = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    for line in ["Rê chuột lên chữ Nhật để tra nghĩa của từ.", "Bấm bánh răng ở cụm nút bên phải cửa sổ game để chỉnh dải, nguồn dịch và từ điển.", "Kéo tay nắm ⠿ để dời dải (mở khoá dải bằng nút bút chì trước)."] {
+        intro.append(&label("intro"));
+        intro.last_child().and_downcast::<gtk4::Label>().unwrap().set_text(line);
+    }
+    let understood = gtk4::Button::with_label("Đã hiểu");
+    understood.add_css_class("understood");
+    understood.set_focusable(false);
+    understood.set_halign(gtk4::Align::Start);
+    intro.append(&understood);
+    intro.set_visible(false);
+    text.append(&intro);
     let grips = [label("grip"), label("grip")];
     grips[0].set_text("⠿");
     grips[0].set_tooltip_text(Some("Kéo để dời dải"));
@@ -1471,7 +1758,7 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
     buttons.add_css_class("bar");
     bar.set_child(Some(&buttons));
     let hide = pictured("view-reveal-symbolic", "Ẩn hoặc hiện dải phụ đề");
-    let edit = pictured("document-edit-symbolic", "Mở khoá dải: kéo ⠿ để dời, kéo ↔ để đổi bề rộng, lăn chuột để đổi cỡ chữ, quét chữ Nhật để chép cho Yomitan");
+    let edit = pictured("document-edit-symbolic", "Mở khoá dải: kéo ⠿ để dời, kéo ↔ để đổi bề rộng, lăn chuột để xem câu cũ, quét chữ Nhật để chép");
     // the one button that says what it is on: an icon and the mode
     let mode = pictured("preferences-desktop-locale-symbolic", "Đổi giữa bản dịch, câu tiếng Nhật, hoặc cả hai");
     let mode_now = gtk4::Label::new(None);
@@ -1484,7 +1771,7 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
 
     let game = mem::name(pid);
     let look = saved_looks().get(&game).map(Look::from_json).unwrap_or_default();
-    let ui = Ui { shown: Shown::default(), look, locked: true, game: None, placed: None, strip: (0, 0, 0), picking: false, reading, selection: None, copied: None, hover: None, asked: None, lookups: 0, over_meaning: false, away: 0 };
+    let ui = Ui { shown: Shown::default(), look, locked: true, game: None, placed: None, strip: (0, 0, 0), picking: false, reading, intro: !intro_read(&saved_looks()), selection: None, copied: None, hover: None, asked: None, lookups: 0, over_meaning: false, away: 0 };
     let overlay = Rc::new(Overlay {
         ui: RefCell::new(ui),
         events,
@@ -1495,7 +1782,8 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
         hub,
         pictures,
         settings,
-        font,
+        sizes,
+        look: look_style,
         strip,
         content,
         speaker,
@@ -1503,6 +1791,10 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
         translation,
         source,
         service,
+        intro,
+        hinted,
+        hint,
+        offer: Cell::new(None),
         grips,
         popup,
         meaning,
@@ -1533,15 +1825,6 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
         drop(ui);
         o.save();
     });
-    let resize = |by: i32| {
-        move |o: &Rc<Overlay>| {
-            let mut ui = o.ui.borrow_mut();
-            ui.look.font = (ui.look.font + by).clamp(*FONTS.start(), *FONTS.end());
-            drop(ui);
-            o.save();
-        }
-    };
-    let step = |by: isize| move |o: &Rc<Overlay>| o.ui.borrow_mut().shown.step(by);
     overlay.acting(&overlay.read, |o| {
         if o.pictures.on() {
             o.pictures.stop();
@@ -1549,30 +1832,33 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
             o.read_pictures();
         }
     });
-    let rest = [
-        overlay.button("zoom-in-symbolic", "Chữ to hơn", resize(2)),
-        overlay.button("zoom-out-symbolic", "Chữ nhỏ hơn", resize(-2)),
-        overlay.button("go-previous-symbolic", "Câu trước", step(-1)),
-        overlay.button("go-next-symbolic", "Câu sau", step(1)),
-        overlay.button("edit-undo-symbolic", "Đưa dải về thiết lập ban đầu: vị trí, bề rộng, cỡ chữ, chế độ hiện", |o| {
-            o.ui.borrow_mut().look = Look::default();
-            o.save();
-        }),
-    ];
-    for button in [&overlay.hide, &overlay.edit, &overlay.mode].into_iter().chain(&rest) {
-        buttons.append(button);
-    }
+    // only what is pressed often is on the bar: the rest is in the settings
+    buttons.append(&overlay.hide);
+    buttons.append(&overlay.edit);
     buttons.append(&overlay.button("edit-copy-symbolic", "Chép câu đang hiện trên dải vào clipboard (theo chế độ: bản dịch, câu Nhật, hoặc cả hai)", |o| {
         let ui = o.ui.borrow();
         if let Some(text) = ui.shown.copied(ui.look.mode) {
             let _ = Command::new("wl-copy").arg("--").arg(text).spawn();
         }
     }));
+    buttons.append(&overlay.mode);
     buttons.append(&overlay.read);
+    buttons.append(&overlay.button("emblem-system-symbolic", "Thiết lập: hiển thị, dịch, từ điển, OCR", |o| o.set_up(Tab::Display)));
     let chooser = overlay.clone();
     overlay.service.connect_clicked(move |_| chooser.choose_service());
-    buttons.append(&overlay.button("edit-select-all-symbolic", "Khoanh lại khung thoại cho OCR", |o| o.pick(false)));
-    buttons.append(&overlay.button("dialog-password-symbolic", "Chọn nguồn dịch (Gemini, OpenAI, Claude, DeepSeek, server local, Google) và nhập API key", |o| o.set_up(Tab::Translate)));
+    let helped = overlay.clone();
+    understood.connect_clicked(move |_| {
+        helped.ui.borrow_mut().intro = false;
+        save_intro_read();
+        helped.render();
+        helped.place();
+    });
+    let remedy = overlay.clone();
+    overlay.hint.connect_clicked(move |_| {
+        if let Some(action) = remedy.offer.get() {
+            remedy.act(action);
+        }
+    });
 
     overlay.dragging(&overlay.grips[0], |place, dx, dy| (place.0, place.1) = (place.0 + dx, place.1 + dy));
     overlay.dragging(&overlay.grips[1], |place, dx, _| place.2 += dx);
@@ -1607,14 +1893,13 @@ fn run(events: Receiver<String>, hub: web::Hub, pid: u32, pictures: Arc<ocr::Con
     let left = overlay.clone();
     pointer.connect_leave(move |_| left.ui.borrow_mut().hover = None);
     overlay.japanese.add_controller(pointer);
-    // unlocked, the wheel over the strip makes its text larger or smaller
+    // the wheel over the strip steps back through the messages and forward again
     let wheel = gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::VERTICAL);
     let scrolled = overlay.clone();
     wheel.connect_scroll(move |_, _, dy| {
         let mut ui = scrolled.ui.borrow_mut();
-        ui.look.font = (ui.look.font - dy.signum() as i32).clamp(*FONTS.start(), *FONTS.end());
+        ui.shown.step(dy.signum() as isize);
         drop(ui);
-        scrolled.save();
         scrolled.render();
         glib::Propagation::Stop
     });
@@ -1658,9 +1943,13 @@ mod tests {
         }
         shown.step(-1);
         assert_eq!(shown.texts(Mode::Japanese).0.as_deref(), Some("2"));
-        // a reader who has stepped back is not pulled forward by the game
+        assert_eq!(shown.old(), Some((2, 3)));
+        assert_eq!(shown.source().as_deref(), Some("ENGINE · 2/3"));
+        // a new message brings the reader back to the newest
         shown.take(r#"{"type":"message","seq":4,"lines":["4"]}"#);
-        assert_eq!(shown.texts(Mode::Japanese).0.as_deref(), Some("2"));
+        assert_eq!(shown.texts(Mode::Japanese).0.as_deref(), Some("4"));
+        assert_eq!(shown.old(), None);
+        assert_eq!(shown.source().as_deref(), Some("ENGINE"));
         shown.step(9);
         assert_eq!(shown.texts(Mode::Japanese).0.as_deref(), Some("4"));
         shown.step(-9);
@@ -1684,8 +1973,60 @@ mod tests {
 
     #[test]
     fn looks_round_trip() {
-        let look = Look { font: 30, mode: Mode::Both, place: Some((10, -20, 640)), hidden: true };
+        let look = Look { font: 30, opacity: 0.4, colour: "#a6e3a1".to_string(), mode: Mode::Both, place: Some((10, -20, 640)), hidden: true };
         assert_eq!(Look::from_json(&look.to_json()), look);
         assert_eq!(Look::from_json(&json!({"font": 500, "mode": "?", "place": [1, 2]})), Look::default());
+    }
+
+    #[test]
+    fn looks_saved_before_opacity_and_colour() {
+        // a file from before the two were there, and one with them out of range or not a colour
+        let old = Look::from_json(&json!({"font": 30, "mode": "both", "place": [1, 2, 300], "hidden": true}));
+        assert_eq!((old.font, old.opacity, old.colour.as_str()), (30, OPACITY, COLOUR));
+        assert_eq!(old.place, Some((1, 2, 300)));
+        let wrong = Look::from_json(&json!({"opacity": 0.0, "colour": "red; } * { display: none"}));
+        assert_eq!((wrong.opacity, wrong.colour.as_str()), (OPACITY, COLOUR));
+        assert_eq!(Look::from_json(&json!({"opacity": 1.0})).opacity, 1.0);
+    }
+
+    #[test]
+    fn the_style_follows_the_look() {
+        let look = Look { opacity: 0.5, colour: "#ffe08a".to_string(), font: 30, ..Look::default() };
+        let (sizes, colour) = strip_style(&look);
+        assert!(sizes.contains("rgba(0, 0, 0, 0.50)") && sizes.contains("font-size: 30px"));
+        assert!(colour.contains("color: #ffe08a"));
+        assert!(is_colour("#00ff7F") && !is_colour("00ff7f") && !is_colour("#00ff7") && !is_colour("#00ff7g"));
+    }
+
+    #[test]
+    fn the_first_time_help_is_marked_once() {
+        assert!(!intro_read(&json!({"game.exe": {}})));
+        assert!(intro_read(&json!({"@intro": true, "game.exe": {}})));
+    }
+
+    #[test]
+    fn hints_and_what_they_offer() {
+        let mut shown = Shown::default();
+        shown.take(r#"{"type":"message","seq":1,"lines":["一"],"translating":true}"#);
+        shown.take(r#"{"type":"hint","text":"hết hạn mức","action":"google"}"#);
+        // the message stays, with the hint beside it
+        assert_eq!(shown.texts(Mode::Japanese).0.as_deref(), Some("一"));
+        assert_eq!(shown.offered(), Some(("hết hạn mức".to_string(), Some(Action::Google))));
+        shown.take(r#"{"type":"translation","seq":1,"tr":"một"}"#);
+        assert_eq!(shown.offered(), None);
+        // a notice takes the place of the message, and only its button is beside it
+        shown.take(r#"{"type":"notice","text":"key sai","action":"translate"}"#);
+        assert_eq!(shown.texts(Mode::Japanese), (None, Some("key sai".to_string()), true));
+        assert_eq!(shown.offered(), Some((String::new(), Some(Action::Translate))));
+        shown.take(r#"{"type":"notice","text":"mạng"}"#);
+        assert_eq!(shown.offered(), None);
+        shown.take(r#"{"type":"message","seq":2,"lines":["二"]}"#);
+        assert_eq!(shown.texts(Mode::Japanese).0.as_deref(), Some("二"));
+    }
+
+    #[test]
+    fn modes_have_names() {
+        assert_eq!(Mode::Both.name(), "Cả hai");
+        assert_eq!(Mode::ALL.map(|m| m.0.name()).len(), 3);
     }
 }

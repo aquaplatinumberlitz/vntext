@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 
 use crate::screen::{by_process, Screen};
 use crate::translate::{self, Service};
-use crate::{doctor, engines, install, mem, ocr};
+use crate::{doctor, engines, explain, install, mem, ocr};
 
 const TICK: Duration = Duration::from_millis(200);
 /// Ticks between two looks at the windows on screen.
@@ -531,7 +531,7 @@ impl Launcher {
     fn returned(self: &Rc<Self>, exit: Exit) {
         let alive = std::path::Path::new(&format!("/proc/{}", exit.pid)).exists();
         match exit.error.filter(|_| alive) {
-            Some(error) => self.status.set_text(&format!("Phần đọc dừng lại: {error}")),
+            Some(error) => self.status.set_text(&format!("Phần đọc dừng lại. {}", explain::explain(&error).text)),
             None if alive => self.status.set_text("Phần đọc đã dừng."),
             None => self.status.set_text("Game đã đóng."),
         }
