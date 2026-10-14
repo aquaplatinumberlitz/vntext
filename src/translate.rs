@@ -6,6 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
 
@@ -18,6 +19,9 @@ const GOOGLE: &str = "https://clients5.google.com/translate_a/t?client=dict-chro
 const BROWSER: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0";
 /// How long a picture may take to be read.
 const READ_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long any other request may take. Without a limit a request that is
+/// never answered would stop the translating for good, and silently.
+const ANSWER_WITHIN: std::time::Duration = std::time::Duration::from_secs(90);
 const CLAUDE_VERSION: &str = "2023-06-01";
 /// Room for a reply: the translations of a dozen passages and, with models
 /// that think first, their thinking.
@@ -83,12 +87,37 @@ pub struct Setup {
     pub base: String,
 }
 
+/// What every request goes through.
+fn agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| ureq::Agent::config_builder().timeout_global(Some(ANSWER_WITHIN)).build().into())
+}
+
 /// Counts the times the setups were saved, for those who translate to see
 /// that they must look again.
 static SAVED: AtomicU64 = AtomicU64::new(0);
 
 pub fn saves() -> u64 {
     SAVED.load(Ordering::Relaxed)
+}
+
+/// Passages the reader has asked to have translated anew, by the number of
+/// the message they were shown in and their place in the script.
+static REDO: Mutex<Vec<(u64, usize)>> = Mutex::new(Vec::new());
+
+pub fn redo(seq: u64, index: usize) {
+    REDO.lock().unwrap().push((seq, index));
+}
+
+/// The passages asked to be translated anew since the last call.
+pub fn redos() -> Vec<(u64, usize)> {
+    std::mem::take(&mut *REDO.lock().unwrap())
+}
+
+/// Whether a request failed for what it holds rather than for the moment:
+/// sent again unchanged, it would fail again.
+pub fn lasting(error: &str) -> bool {
+    [BLOCKED, "declined", "asked for", "not a JSON array", "no text in reply"].iter().any(|w| error.contains(w))
 }
 
 /// The file of setups: `{"use": id, "services": {id: {key, model, base}}}`.
@@ -185,10 +214,10 @@ pub fn models(setup: &Setup) -> Result<Vec<String>, String> {
     }
     let asked = match setup.service {
         Service::Google => return Ok(Vec::new()),
-        Service::Gemini => ureq::get(&format!("{GEMINI}/models?pageSize=1000")).header("x-goog-api-key", key).call(),
-        Service::Claude => ureq::get(&format!("{base}/models?limit=1000")).header("x-api-key", key).header("anthropic-version", CLAUDE_VERSION).call(),
+        Service::Gemini => agent().get(&format!("{GEMINI}/models?pageSize=1000")).header("x-goog-api-key", key).call(),
+        Service::Claude => agent().get(&format!("{base}/models?limit=1000")).header("x-api-key", key).header("anthropic-version", CLAUDE_VERSION).call(),
         Service::OpenAi | Service::DeepSeek | Service::Local => {
-            let request = ureq::get(&format!("{base}/models"));
+            let request = agent().get(&format!("{base}/models"));
             if key.is_empty() { request.call() } else { request.header("Authorization", &format!("Bearer {key}")).call() }
         }
     };
@@ -199,11 +228,10 @@ pub fn models(setup: &Setup) -> Result<Vec<String>, String> {
 /// The names in a list of models: Gemini's under `models`, each a `name`
 /// that starts with `models/`; the others' under `data`, each an `id`.
 fn model_names(reply: &Value) -> Vec<String> {
-    let gemini = reply["models"].as_array().into_iter().flatten().filter(|m| {
-        // those that write text, not those that only embed or draw
-        m["supportedGenerationMethods"].as_array().is_some_and(|ways| ways.iter().any(|w| w == "generateContent"))
+    let gemini = reply["models"].as_array().into_iter().flatten().filter_map(|m| {
+        let name = m["name"].as_str()?.trim_start_matches("models/");
+        writes_text(m, name).then(|| name.to_string())
     });
-    let gemini = gemini.filter_map(|m| m["name"].as_str()).map(|name| name.trim_start_matches("models/").to_string());
     let others = reply["data"].as_array().into_iter().flatten().filter_map(|m| m["id"].as_str()).map(str::to_string);
     let mut names: Vec<String> = gemini.chain(others).collect();
     names.sort();
@@ -302,6 +330,14 @@ impl Translator {
         self.google.contains(text)
     }
 
+    /// Lets go of the translation of `text`, for it to be asked for anew.
+    /// The one in the file stays, but the new one is written after it and
+    /// so is the one read back.
+    pub fn forget(&mut self, text: &str) {
+        self.cache.remove(text);
+        self.google.remove(text);
+    }
+
     /// Caches translations in memory, and a model's on disk as well:
     /// Google's are the lesser ones and not worth keeping from a later run.
     pub fn store(&mut self, lines: &[Line], translations: Vec<String>, via: Via) {
@@ -331,7 +367,7 @@ impl Client {
     pub fn google(&self, lines: &[Line]) -> Result<Vec<String>, String> {
         let mut form: Vec<(&str, &str)> = vec![("tl", &self.code)];
         form.extend(lines.iter().map(|l| ("q", l.text.as_str())));
-        let mut response = ureq::post(GOOGLE).header("User-Agent", BROWSER).send_form(form).map_err(api_error)?;
+        let mut response = agent().post(GOOGLE).header("User-Agent", BROWSER).send_form(form).map_err(api_error)?;
         let reply: Value = response.body_mut().read_json().map_err(|e| e.to_string())?;
         google_reply(&reply, lines.len())
     }
@@ -379,9 +415,10 @@ impl Client {
                 "responseMimeType": "application/json",
                 "responseSchema": {"type": "ARRAY", "items": {"type": "STRING"}},
             },
+            "safetySettings": unguarded(),
         });
         let url = format!("{GEMINI}/models/{}:generateContent", self.model);
-        let mut response = ureq::post(&url).header("x-goog-api-key", &self.key).send_json(&body).map_err(api_error)?;
+        let mut response = agent().post(&url).header("x-goog-api-key", &self.key).send_json(&body).map_err(api_error)?;
         let reply: Value = response.body_mut().read_json().map_err(|e| e.to_string())?;
         parse_reply(&reply)
     }
@@ -395,7 +432,7 @@ impl Client {
             "model": self.model,
             "messages": [{"role": "system", "content": self.instructions()}, {"role": "user", "content": input}],
         });
-        let mut request = ureq::post(&format!("{}/chat/completions", self.base));
+        let mut request = agent().post(&format!("{}/chat/completions", self.base));
         if !self.key.is_empty() {
             request = request.header("Authorization", &format!("Bearer {}", self.key));
         }
@@ -419,7 +456,7 @@ impl Client {
             if effort {
                 body["output_config"] = json!({"effort": "low"});
             }
-            ureq::post(&format!("{}/messages", self.base)).header("x-api-key", &self.key).header("anthropic-version", CLAUDE_VERSION).send_json(&body)
+            agent().post(&format!("{}/messages", self.base)).header("x-api-key", &self.key).header("anthropic-version", CLAUDE_VERSION).send_json(&body)
         };
         let mut response = match ask(true) {
             Err(ureq::Error::StatusCode(400)) => ask(false),
@@ -491,17 +528,41 @@ impl Client {
                 "responseMimeType": "application/json",
                 "responseSchema": {"type": "OBJECT", "properties": properties, "required": required},
             },
+            "safetySettings": unguarded(),
         });
         let url = format!("{GEMINI}/models/{}:generateContent", self.model);
         // without a limit a request that is never answered would stop the reading for good, and silently
-        let mut response = ureq::post(&url).config().timeout_global(Some(READ_WITHIN)).build().header("x-goog-api-key", &self.key).send_json(&body).map_err(api_error)?;
+        let mut response = agent().post(&url).config().timeout_global(Some(READ_WITHIN)).build().header("x-goog-api-key", &self.key).send_json(&body).map_err(api_error)?;
         let reply: Value = response.body_mut().read_json().map_err(|e| e.to_string())?;
         parse_shown(&reply)
     }
 }
 
+/// Said of a text that Gemini will not take or answer.
+const BLOCKED: &str = "Gemini blocked the text";
+
+/// Gemini's filters, all turned down: at their defaults they would turn
+/// away much of what visual novels say. What they block regardless is told
+/// by `reply_text`.
+fn unguarded() -> Value {
+    let filters = ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"];
+    filters.iter().map(|filter| json!({"category": filter, "threshold": "BLOCK_NONE"})).collect()
+}
+
+/// The text of Gemini's answer, or why there is none: a request turned
+/// away as a whole has a `blockReason`, an answer cut off a `finishReason`.
 fn reply_text(reply: &Value) -> Result<&str, String> {
-    reply["candidates"][0]["content"]["parts"][0]["text"].as_str().ok_or_else(|| unexpected(reply))
+    if let Some(reason) = reply["promptFeedback"]["blockReason"].as_str() {
+        return Err(format!("{BLOCKED} ({reason})"));
+    }
+    let candidate = &reply["candidates"][0];
+    if let Some(text) = candidate["content"]["parts"][0]["text"].as_str() {
+        return Ok(text);
+    }
+    match candidate["finishReason"].as_str() {
+        Some(reason @ ("SAFETY" | "PROHIBITED_CONTENT" | "BLOCKLIST" | "SPII" | "RECITATION" | "IMAGE_SAFETY")) => Err(format!("{BLOCKED} ({reason})")),
+        _ => Err(unexpected(reply)),
+    }
 }
 
 fn parse_reply(reply: &Value) -> Result<Vec<String>, String> {
@@ -536,19 +597,23 @@ impl Client {
     }
 }
 
+/// Whether a Gemini model answers in text. Those that speak, draw or talk
+/// live take `generateContent` as well but cannot translate or read.
+fn writes_text(model: &Value, name: &str) -> bool {
+    let generates = model["supportedGenerationMethods"].as_array().is_some_and(|ways| ways.iter().any(|w| w == "generateContent"));
+    generates && !["tts", "image", "live", "audio"].iter().any(|w| name.contains(w))
+}
+
 /// Model ids change every few months, so ask the API which Flash-Lite models
 /// exist and take the highest version, preferring a stable one over a preview.
 fn newest_flash_lite(key: &str) -> Result<String, String> {
     let mut response =
-        ureq::get(&format!("{GEMINI}/models?pageSize=1000")).header("x-goog-api-key", key).call().map_err(api_error)?;
+        agent().get(&format!("{GEMINI}/models?pageSize=1000")).header("x-goog-api-key", key).call().map_err(api_error)?;
     let list: Value = response.body_mut().read_json().map_err(|e| e.to_string())?;
     let mut best: Option<((bool, Vec<u32>), String)> = None;
     for model in list["models"].as_array().into_iter().flatten() {
         let name = model["name"].as_str().unwrap_or("").trim_start_matches("models/");
-        let generates = model["supportedGenerationMethods"]
-            .as_array()
-            .is_some_and(|m| m.iter().any(|v| v == "generateContent"));
-        if !generates || !name.contains("flash-lite") || ["tts", "image", "live", "audio"].iter().any(|w| name.contains(w)) {
+        if !writes_text(model, name) || !name.contains("flash-lite") {
             continue;
         }
         let rank = (!name.contains("preview"), version_of(name));
@@ -598,6 +663,18 @@ mod tests {
     }
 
     #[test]
+    fn blocked_replies_say_so() {
+        let whole = json!({"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}});
+        let cut = json!({"candidates": [{"finishReason": "SAFETY"}]});
+        for reply in [whole, cut] {
+            let e = parse_reply(&reply).unwrap_err();
+            assert!(e.starts_with(BLOCKED) && lasting(&e), "{e}");
+        }
+        assert!(lasting("asked for 13 translations, got 12") && lasting("Claude declined to translate this"));
+        assert!(!lasting("rate limit reached (HTTP 429)") && !lasting("io: timed out"));
+    }
+
+    #[test]
     fn shown_parsing() {
         let reply = |text: &str| json!({"candidates": [{"content": {"parts": [{"text": text}]}}]});
         let shown = parse_shown(&reply(r#"{"speaker": "", "text": " 一行目\n二行目 ", "translation": "x"}"#)).unwrap();
@@ -617,7 +694,8 @@ mod tests {
         let gemini = json!({"models": [
             {"name": "models/gemini-b", "supportedGenerationMethods": ["generateContent"]},
             {"name": "models/embed", "supportedGenerationMethods": ["embedContent"]},
-            {"name": "models/gemini-a", "supportedGenerationMethods": ["generateContent", "countTokens"]}
+            {"name": "models/gemini-a", "supportedGenerationMethods": ["generateContent", "countTokens"]},
+            {"name": "models/gemini-a-tts", "supportedGenerationMethods": ["generateContent"]}
         ]});
         assert_eq!(model_names(&gemini), ["gemini-a", "gemini-b"]);
         assert_eq!(model_names(&json!({"data": [{"id": "m2"}, {"id": "m1"}]})), ["m1", "m2"]);
@@ -647,5 +725,23 @@ mod tests {
     #[test]
     fn versions_order() {
         assert!(version_of("gemini-3.1-flash-lite") > version_of("gemini-2.5-flash-lite"));
+    }
+}
+
+#[cfg(test)]
+mod live {
+    use super::*;
+
+    /// Run by hand: `cargo test --release live -- --ignored --nocapture`.
+    /// Translates one line with the newest Flash-Lite and the key set up.
+    #[test]
+    #[ignore]
+    fn gemini_takes_the_request() {
+        let mut client = Client::new("vi", None, Some(Service::Gemini)).unwrap();
+        assert_eq!(client.service, Service::Gemini, "no Gemini key set up");
+        client.renew().unwrap();
+        let lines = [Line { speaker: Some("桜".to_string()), text: "おはよう。今日もいい天気だね。".to_string() }];
+        let (translations, via) = client.translate(&["……".to_string()], &lines).unwrap();
+        eprintln!("{} via {via:?}: {translations:?}", client.model);
     }
 }

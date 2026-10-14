@@ -150,11 +150,17 @@ window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
 /// Starts the overlay for the game `pid`. It shows the messages and notices
 /// sent to the page from now on. With `reading` it has the text box read
 /// from pictures at once, asking where the box is if it was never told.
-pub fn start(hub: web::Hub, pid: u32, pictures: Arc<ocr::Control>, settings: ocr::Settings, reading: bool) {
+/// Without the overlay, a reading that is `seen` nowhere else ends: started
+/// from the launcher, it would go on with nothing on screen to tell of it.
+pub fn start(hub: web::Hub, pid: u32, pictures: Arc<ocr::Control>, settings: ocr::Settings, reading: bool, seen: bool) {
     let events = hub.subscribe();
     thread::spawn(move || {
         if let Err(e) = run(events, hub, pid, pictures, settings, reading) {
-            eprintln!("\x1b[33mno overlay: {e}\x1b[0m");
+            if seen {
+                eprintln!("\x1b[33mno overlay: {e}\x1b[0m");
+            } else {
+                crate::die(&format!("no overlay: {e}"));
+            }
         }
     });
 }
@@ -285,6 +291,8 @@ fn save_look(game: &str, look: &Look) {
 
 struct Message {
     seq: u64,
+    /// its place in the game's script, when it comes from a profile
+    index: Option<usize>,
     name: Option<String>,
     lines: Vec<String>,
     translation: Option<String>,
@@ -325,7 +333,8 @@ impl Shown {
                 let lines = event["lines"].as_array().into_iter().flatten().filter_map(text).collect();
                 let pending = event["translating"] == true;
                 let pictured = event["source"] == "ocr";
-                self.messages.push(Message { seq, name: text(&event["name"]), lines, translation: None, pending, pictured, google: false });
+                let index = event["index"].as_u64().map(|index| index as usize);
+                self.messages.push(Message { seq, index, name: text(&event["name"]), lines, translation: None, pending, pictured, google: false });
                 if self.messages.len() > KEPT {
                     self.messages.remove(0);
                     }
@@ -384,6 +393,20 @@ impl Shown {
             (None, Some(hint)) => Some((hint.text.clone(), hint.action)),
             (None, None) => None,
         }
+    }
+
+    /// Has the message shown translated anew, if it is one of the script's
+    /// and has a translation; gives its number and place in the script.
+    fn retranslate(&mut self) -> Option<(u64, usize)> {
+        let message = self.messages.get_mut(self.at).filter(|m| !m.pending && m.translation.is_some())?;
+        let index = message.index?;
+        (message.translation, message.pending) = (None, true);
+        Some((message.seq, index))
+    }
+
+    /// Whether the message shown can be translated anew.
+    fn retranslatable(&self) -> bool {
+        self.notice.is_none() && self.messages.get(self.at).is_some_and(|m| m.index.is_some() && !m.pending && m.translation.is_some())
     }
 
     /// Whether Google Translate made the translation shown.
@@ -782,7 +805,7 @@ fn dictionaries(window: &gtk4::Window) -> gtk4::Box {
                 if !added.is_empty() {
                     said.push(format!("Đã thêm: {}.", added.join(", ")));
                 }
-                said.extend(failed.drain(..));
+                said.append(&mut failed);
                 note.set_text(&said.join("\n"));
                 glib::ControlFlow::Break
             });
@@ -1034,11 +1057,11 @@ impl Overlay {
         // other leads over neither.
         let at = ui.hover.map(|h| h.0);
         ui.away = if at.is_some() || ui.over_meaning { 0 } else { ui.away + 1 };
-        if at.is_some() && at != ui.asked {
+        if let Some(start) = at.filter(|_| at != ui.asked) {
             ui.asked = at;
             ui.lookups += 1;
             let text = self.japanese.text();
-            let from: String = text.get(at.unwrap()..).unwrap_or_default().chars().take_while(|c| *c != '\n').take(LOOKED_UP).collect();
+            let from: String = text.get(start..).unwrap_or_default().chars().take_while(|c| *c != '\n').take(LOOKED_UP).collect();
             let _ = self.asks.send((ui.lookups, from));
         }
         if ui.away > LINGERS && ui.asked.is_some() {
@@ -1147,6 +1170,19 @@ impl Overlay {
                 let _ = Command::new("wl-copy").arg("--").arg(copied).spawn();
             }),
         );
+        // a translation that came out wrong, or from a service since replaced
+        if translate::at_work().is_some() && self.ui.borrow().shown.retranslatable() {
+            item(
+                "Dịch lại câu này",
+                Box::new(|o| {
+                    let asked = o.ui.borrow_mut().shown.retranslate();
+                    if let Some((seq, index)) = asked {
+                        translate::redo(seq, index);
+                        o.render();
+                    }
+                }),
+            );
+        }
         // text can be selected only while the strip is unlocked
         if self.japanese.is_selectable() {
             item("Chọn tất cả", Box::new(|o| o.japanese.select_region(0, -1)));

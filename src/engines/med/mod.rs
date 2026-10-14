@@ -133,7 +133,7 @@ impl Archive {
                     .filter_map(|target| half(data, text::CLEAR + target + 4).and_then(|i| strings.get(i)))
                     .map(|option| option.trim())
                     // menus of the system scripts have placeholders for text
-                    .filter(|option| option.chars().any(|c| !c.is_ascii()))
+                    .filter(|option| !option.is_ascii())
                     .collect();
                 if !options.is_empty() {
                     let after = offset + 3 + length as u32;

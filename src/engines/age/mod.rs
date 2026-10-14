@@ -78,9 +78,9 @@ fn running(fields: &[u8]) -> Option<(text::Shape, u32, u32)> {
         return None;
     }
     let mut shape = [0; 12];
-    for k in 0..6 {
-        shape[k] = field(fields, COUNTS + k);
-        if shape[k] > MAX_COUNT {
+    for (k, count) in shape.iter_mut().take(6).enumerate() {
+        *count = field(fields, COUNTS + k);
+        if *count > MAX_COUNT {
             return None;
         }
     }

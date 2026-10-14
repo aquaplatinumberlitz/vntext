@@ -315,7 +315,7 @@ pub fn run(pid: u32, o: &Opts, reading: bool) {
     let control = Arc::new(Control::default());
     if o.overlay {
         // the overlay asks for the text box itself
-        overlay::start(hub.clone(), pid, control.clone(), Settings::of(o), reading);
+        overlay::start(hub.clone(), pid, control.clone(), Settings::of(o), reading, o.web);
         if !reading {
             notice(&hub, "Chưa nhận ra engine của game này. Bấm OCR để đọc khung thoại bằng ảnh.");
         }

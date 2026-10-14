@@ -70,7 +70,9 @@ type Detector = fn(&Proc) -> Option<Box<dyn Engine>>;
 /// Tried in order; the ones that only look at the game's files come first.
 const DETECTORS: &[Detector] = &[spt::detect, med::detect, ark::detect, ninetail::detect, age::detect, liar::detect, escude::detect, yuris::detect, shin::detect, bishop::detect];
 
-/// Returns the profile of the first engine recognised in the process.
+/// Returns the profile of the first engine recognised in the process. A
+/// profile that panics on files it does not expect is passed over: every
+/// profile is tried on every game.
 pub fn detect(p: &Proc) -> Option<Box<dyn Engine>> {
-    DETECTORS.iter().find_map(|detect| detect(p))
+    DETECTORS.iter().find_map(|detect| crate::guarded(|| detect(p)).flatten())
 }

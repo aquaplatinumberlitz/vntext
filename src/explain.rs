@@ -43,6 +43,8 @@ pub fn explain(raw: &str) -> Explained {
     let has = |words: &[&str]| words.iter().any(|w| lower.contains(w));
     let (text, action) = if not_authorized(raw) {
         ("KWin chưa cho vntext chụp cửa sổ game, nên OCR không đọc được. Mở cửa sổ chọn game (chạy vntext không tham số), bấm \"Thêm vào menu ứng dụng\", rồi đọc lại game.", None)
+    } else if has(&["blocked the text", "declined to translate"]) {
+        ("Dịch vụ từ chối đoạn này vì bộ lọc nội dung của nó. Với bản dịch, đoạn đó được chuyển sang Google Dịch.", None)
     } else if has(&["429", "rate limit", "quota", "resource_exhausted", "too many requests"]) {
         ("Dịch vụ dịch báo đã hết hạn mức (quá nhiều yêu cầu). Đợi một lúc, hoặc dịch bằng Google, không cần key.", Some(Action::Google))
     } else if has(&["401", "403", "unauthorized", "forbidden", "api key", "api_key", "permission_denied", "invalid_api"]) && !has(&["os error 13"]) {
@@ -134,6 +136,13 @@ mod tests {
         let memory = said("cannot open pid 12: Permission denied (os error 13)");
         assert!(memory.1.contains("Cho phép") && memory.0.is_none());
         assert_eq!(said("target process is gone").1, "Game đã đóng.");
+    }
+
+    #[test]
+    fn refusals_are_told() {
+        for raw in ["Gemini blocked the text (PROHIBITED_CONTENT)", "OCR: Gemini blocked the text (SAFETY)", "Claude declined to translate this"] {
+            assert!(said(raw).1.contains("bộ lọc nội dung"), "{raw}");
+        }
     }
 
     #[test]

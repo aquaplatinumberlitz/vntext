@@ -65,7 +65,7 @@ fn pack(p: &Proc) -> Option<(PathBuf, PathBuf)> {
 
 fn mono_string(p: &Proc, at: u64) -> Option<String> {
     let mut len = [0u8; 4];
-    if at < 0x1_0000 || at % 8 != 0 || p.read(at + STRING_LENGTH_AT, &mut len) != 4 {
+    if at < 0x1_0000 || !at.is_multiple_of(8) || p.read(at + STRING_LENGTH_AT, &mut len) != 4 {
         return None;
     }
     let len = u32::from_le_bytes(len) as usize;
@@ -165,7 +165,7 @@ impl Engine for Game {
                 let stored = [1, 0, 0, 0, low, high, 0, 0];
                 for hit in memmem::find_iter(data, &stored).take_while(|hit| *hit < limit) {
                     let at = (base + hit as u64).wrapping_sub(STRING_LENGTH_AT);
-                    if at % 8 == 0 {
+                    if at.is_multiple_of(8) {
                         strings[which].insert(at);
                     }
                 }

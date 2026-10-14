@@ -358,7 +358,7 @@ impl Launcher {
         if self.window.is_visible() {
             let ticks = self.ticks.get();
             self.ticks.set(ticks + 1);
-            if ticks % REFRESH == 0 {
+            if ticks.is_multiple_of(REFRESH) {
                 self.refresh();
             }
             self.show_options();

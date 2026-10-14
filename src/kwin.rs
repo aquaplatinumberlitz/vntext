@@ -297,6 +297,7 @@ extern "C" fn signalled(signal: libc::c_int) {
 /// not take the program down with it. A script left behind is unloaded by
 /// the next run.
 extern "C" fn at_exit() {
+    crate::LEAVING.store(true, std::sync::atomic::Ordering::SeqCst);
     let _ = std::panic::catch_unwind(cleanup);
 }
 

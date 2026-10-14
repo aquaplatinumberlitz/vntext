@@ -126,6 +126,7 @@ Cụm nút bên phải cửa sổ game, từ trên xuống:
 
 - **Xem lại câu cũ:** lăn chuột trên dải. Dải ghi "3/40" khi đang xem câu cũ; có câu mới thì quay về câu mới nhất.
 - **Click xuyên qua:** ở chế độ chỉ hiện bản dịch, click đi xuyên qua dải xuống game.
+- **Chuột phải lên câu Nhật:** chép câu, và **Dịch lại câu này** khi bản dịch sai hoặc do nguồn dịch cũ làm.
 - **Hộp thiết lập** có bốn tab: Hiển thị (cỡ chữ, độ mờ nền, màu chữ, chế độ, đặt lại mặc định), Dịch, Từ điển, OCR. Đóng bằng nút X hoặc Esc. Thiết lập của dải lưu theo từng game.
 - **Lỗi** hiện bằng lời thường kèm nút việc nên làm; chuỗi lỗi gốc vẫn in ra terminal nếu bạn chạy từ đó.
 
@@ -156,6 +157,9 @@ Mỗi từ điển có công tắc bật/tắt, nút đổi thứ tự (từ đi
 
 - **Nhập key và model:** bánh răng → tab Dịch. Nút "Danh sách" tải danh sách model của nguồn. Tool đang chạy đổi nguồn ngay khi lưu.
 - **Các nguồn dùng model** dịch nguyên đoạn kèm 8 đoạn trước làm ngữ cảnh, và mỗi lần gọi dịch luôn 12 đoạn kế tiếp. Bản dịch lưu ở `~/.cache/vntext/<ngôn ngữ>.tsv`, đọc lại không tốn lần gọi nào.
+- **Dịch lại:** chuột phải lên câu trên dải → "Dịch lại câu này". Bản dịch mới thay bản cũ, cả trong cache.
+- **Đoạn bị bộ lọc chặn:** model từ chối một đoạn (bộ lọc nội dung của Gemini, Claude từ chối) thì tool chia nhỏ lần gọi để tìm đúng đoạn đó, các đoạn khác vẫn được model dịch, còn đoạn đó do Google dịch. Bộ lọc của Gemini đã được hạ hết mức API cho phép.
+- **Request treo** quá 90 giây thì bị bỏ và gọi lại, không làm dịch ngừng hẳn.
 - **Google Dịch** đi qua cổng không chính thức, dịch từng câu rời không có ngữ cảnh, và không lưu cache. Nó tự thay vào khi nguồn đã chọn thiếu key, và cho riêng câu đang đọc khi nguồn đã chọn lỗi.
 - Mới chỉ Gemini và Google được chạy thử thật; các nguồn còn lại viết theo tài liệu API.
 
@@ -290,7 +294,7 @@ tools/
   yomitan-dump.mjs   Xuất luật của Yomitan ra japanese.json và vectors.json
 docs/
   engines.md         Ghi chú kỹ thuật từng engine
-PLAN.md              Kế hoạch đã dùng để làm phần giao diện cho người mới
+  PLAN.md            Kế hoạch đã dùng để làm phần giao diện cho người mới
 ```
 
 Tool gồm ba tầng, chỉ tầng giữa phụ thuộc engine:
@@ -462,7 +466,7 @@ Trong lúc chưa có profile, game vẫn chơi được bằng OCR, hoặc bằn
 | Cách lấy text | Hook hàm trong process game | Hook hàm trong process game hoặc emulator | Đọc script từ file game, đọc vị trí từ bộ nhớ |
 | Can thiệp vào game | Inject DLL | Inject Frida | Không; chỉ đọc từ bên ngoài |
 | Thứ nó phụ thuộc | Engine và cách game gọi hàm vẽ chữ | Phiên bản game và phiên bản emulator | Định dạng script và cấu trúc dữ liệu của engine |
-| Game được hỗ trợ | Rất nhiều; game lạ vẫn thử được bằng hook chung | Theo danh sách script có sẵn | Chỉ các engine có profile (xem [Tình trạng](#tình-trạng)) |
+| Game được hỗ trợ | Rất nhiều; game lạ vẫn thử được bằng hook chung | Theo danh sách script có sẵn | Chỉ các engine có profile (xem [Game đã hỗ trợ](#game-đã-hỗ-trợ)) |
 | Game chưa hỗ trợ | Tự tìm hook hoặc H-code | Viết script hook mới | Viết profile mới bằng Rust |
 | Thứ nhận được | Chuỗi tại thời điểm hàm được gọi | Chuỗi tại thời điểm hàm được gọi | Cả đoạn thoại kèm tên người nói, và toàn bộ script |
 | Nền tảng | Windows; trên Linux phải chạy trong cùng Wine prefix với game | Windows, Linux, macOS | Linux |
@@ -476,9 +480,9 @@ Dự án bắt đầu vì agent dừng hoạt động trên Ryujinx 1.3.3 sau kh
 - [GARbro, ArcMED.cs](https://github.com/morkt/GARbro/blob/master/ArcFormats/DxLib/ArcMED.cs): định dạng gói `.med`.
 - Bộ công cụ dịch cho engine MED 催眠術3-4-re (`MED.py`, `SCE.py`, https://github.com/aquaplatinumberlitz/saiminjutsu-fudegaki-backrainbow-tools): cách dò khoá và định dạng script.
 - [shimamura-sakura/yuri](https://github.com/shimamura-sakura/yuri): bộ dịch ngược và tài liệu định dạng của YU-RIS.
-- Bộ công cụ patch tiếng Anh cho 催眠術2 ura催眠術2 (https://github.com/aquaplatinumberlitz/saiminjutsu-fudegaki-backrainbow-tools), không rõ tác giả): nguồn của định dạng gói `*_spt.dat` và file `.spt`.
+- Bộ công cụ patch tiếng Anh cho 催眠術2 và 催眠術2 URA (https://github.com/aquaplatinumberlitz/saiminjutsu-fudegaki-backrainbow-tools, không rõ tác giả): nguồn của định dạng gói `*_spt.dat` và file `.spt`.
 - [0xDC00/agent](https://github.com/0xDC00/agent): text hooker dùng Frida, điểm xuất phát của dự án.
-- [Artikash/Textractor](https://github.com/Artikash/Textractor): text hooker phổ biến nhất trên Windows; so sánh ở mục [Vì sao viết tool này](#vì-sao-viết-tool-này-khi-đã-có-textractor-và-agent).
+- [Artikash/Textractor](https://github.com/Artikash/Textractor): text hooker phổ biến nhất trên Windows; so sánh ở mục [So với Textractor và agent](#so-với-textractor-và-agent).
 - [Kelebek1/Eushully-Decompiler](https://github.com/Kelebek1/Eushully-Decompiler): định dạng script và gói của engine AGE.
 - [Love-in-idleness/LiarsoftTool](https://github.com/Love-in-idleness/LiarsoftTool): định dạng gói XFL và script GSC của Liar-soft.
 - [Chenx221/EscudeTools](https://github.com/Chenx221/EscudeTools): định dạng gói, database và script của Escu:de.

@@ -254,7 +254,7 @@ pub fn scan(buf: &[u8], base: u64, limit: usize, cfg: &Cfg, out: &mut Vec<Hit>) 
     let mut i = 0;
     while let Some(k) = memchr(0x30, &buf[i..]) {
         let p = i + k;
-        if p >= limit + 1 {
+        if p > limit {
             break;
         }
         let jp = |at: usize| at + 1 < len && unit(buf, at) >= 0x3000 && ok16(unit(buf, at));

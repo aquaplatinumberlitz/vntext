@@ -84,7 +84,7 @@ pub fn search(store: &Store, text: &str) -> Result<Found, String> {
             }
         }
     }
-    hits.sort_by(|a, b| (std::cmp::Reverse(a.0), a.1, a.2.position, std::cmp::Reverse(a.2.term.score)).cmp(&(std::cmp::Reverse(b.0), b.1, b.2.position, std::cmp::Reverse(b.2.term.score))));
+    hits.sort_by_key(|a| (std::cmp::Reverse(a.0), a.1, a.2.position, std::cmp::Reverse(a.2.term.score)));
     let length = hits.first().map_or(0, |h| h.0);
     // one entry for each word and reading, whoever lists it
     let mut words: Vec<((String, String), Vec<Hit>)> = Vec::new();
@@ -113,8 +113,8 @@ pub fn search(store: &Store, text: &str) -> Result<Found, String> {
         }
         let mut definitions = Vec::new();
         for hit in &hits {
-            if !categories.contains_key(&hit.dict) {
-                categories.insert(hit.dict, store.categories(hit.dict)?);
+            if let std::collections::hash_map::Entry::Vacant(e) = categories.entry(hit.dict) {
+                e.insert(store.categories(hit.dict)?);
             }
             let known = &categories[&hit.dict];
             let marks = hit.term.tags.split_whitespace().chain(hit.term.term_tags.split_whitespace());

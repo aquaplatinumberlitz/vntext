@@ -1,3 +1,7 @@
+// Bytes are taken a few at a time with `chunks_exact` throughout, which
+// reads as plainly as `as_chunks`; tuples of channels are kept unnamed.
+#![allow(clippy::chunks_exact_to_as_chunks, clippy::type_complexity)]
+
 mod dict;
 mod doctor;
 mod engines;
@@ -19,6 +23,7 @@ use std::collections::{HashSet, VecDeque};
 use std::io::Write;
 use std::process::{exit, Command};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -56,7 +61,8 @@ auto and ocr also take:
   --open         with --web: open the page in the browser
   --port N       port for --web
   --overlay      show each message, translated if --translate is given, in a strip by the game's window
-  --translate    translate each message with the Gemini API (needs GEMINI_API_KEY)
+  --translate    translate each message, with the service named by --via (Google Translate when
+                 that service has no key)
   --to LANG      target language (default vi)
   --via NAME     who translates: gemini, openai, deepseek, claude, local (a server that speaks like
                  OpenAI's) or google; default: the one chosen on the overlay, or gemini. Keys come from
@@ -155,11 +161,44 @@ fn serve(hub: &web::Hub, o: &Opts) {
     }
 }
 
+/// Set once the program has begun to end.
+static LEAVING: AtomicBool = AtomicBool::new(false);
+
 /// Ends the program, taking out of KWin what was put there while that can
 /// still be done.
 fn leave(code: i32) -> ! {
+    LEAVING.store(true, Ordering::SeqCst);
     kwin::cleanup();
     exit(code)
+}
+
+thread_local! {
+    /// This thread is in `guarded`, which takes care of a panic itself.
+    static GUARDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `f`, which is allowed to fail by panicking: its panic is told and
+/// gives `None`, and does not end the program.
+fn guarded<T>(f: impl FnOnce() -> T) -> Option<T> {
+    let before = GUARDED.replace(true);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok();
+    GUARDED.set(before);
+    result
+}
+
+/// Has a panic on any thread end the program. Else the rest would go on
+/// without that thread: a reading with no strip on screen, translations
+/// that never come. Started from the launcher, the end and its last words
+/// are shown there.
+fn end_on_panic() {
+    let report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        report(info);
+        // a panic while the program ends already is left to unwind
+        if !LEAVING.load(Ordering::SeqCst) && !GUARDED.get() {
+            leave(101);
+        }
+    }));
 }
 
 fn open(target: &str) -> Proc {
@@ -171,6 +210,7 @@ fn open(target: &str) -> Proc {
 }
 
 fn main() {
+    end_on_panic();
     let o = parse_args();
     let cfg = Cfg { min_chars: o.min, min_kana: 2 };
     let a: Vec<&str> = o.args.iter().map(String::as_str).collect();
@@ -357,7 +397,7 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
     // while the reader has the text box read from pictures, the profile keeps quiet
     let pictures = Arc::new(ocr::Control::default());
     if o.overlay {
-        overlay::start(hub.clone(), p.pid, pictures.clone(), ocr::Settings::of(o), false);
+        overlay::start(hub.clone(), p.pid, pictures.clone(), ocr::Settings::of(o), false, o.web);
     }
     let translator = o.translate.then(|| translate::Translator::new(&o.to, o.model.clone(), o.via)).and_then(|made| match made {
         Ok(translator) => Some(translator),
@@ -481,7 +521,7 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
             // with nothing to follow, keep looking without pause
             None if !following || changed.elapsed() >= retry => {
                 relocations += 1;
-                let thorough = relocations % THOROUGH_EVERY == 0;
+                let thorough = relocations.is_multiple_of(THOROUGH_EVERY);
                 let (tx, rx) = mpsc::channel();
                 let (engine, pid) = (engine.clone(), p.pid);
                 thread::spawn(move || {
@@ -505,7 +545,7 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
 /// is started while half of the lookahead is still cached, so that a
 /// translation is normally there by the time its passage is shown.
 fn translator_worker(t: translate::Translator, o_to: String, engine: Arc<dyn Engine>, hub: web::Hub, jobs: Receiver<(u64, usize)>) {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
 
     let unit = |index: usize| {
@@ -516,10 +556,16 @@ fn translator_worker(t: translate::Translator, o_to: String, engine: Arc<dyn Eng
     let mut setups = translate::saves();
     let t = Arc::new(Mutex::new(t));
     let fetching = Arc::new(AtomicBool::new(false));
+    // Passages asked for at once. A request that fails for what it holds
+    // (a passage the service will not translate) is sent again in halves,
+    // which finds the passage at fault while the others get translated.
+    let batch = Arc::new(AtomicUsize::new(LOOKAHEAD + 1));
     // shown passages still waiting for their translation
     let mut waiting: VecDeque<(u64, usize)> = VecDeque::new();
     let mut newest = 0;
     let mut latest = None;
+    // a passage the reader has asked to have translated anew
+    let mut redo: Option<usize> = None;
     loop {
         // the reader has set translation up anew on the overlay: go by that from here on
         if setups != translate::saves() {
@@ -546,6 +592,12 @@ fn translator_worker(t: translate::Translator, o_to: String, engine: Arc<dyn Eng
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
+        for (seq, index) in translate::redos() {
+            t.lock().unwrap().forget(&unit(index).text);
+            waiting.retain(|(s, _)| *s != seq);
+            waiting.push_back((seq, index));
+            redo = Some(index);
+        }
 
         waiting.retain(|(seq, index)| {
             let text = unit(*index).text;
@@ -558,51 +610,94 @@ fn translator_worker(t: translate::Translator, o_to: String, engine: Arc<dyn Eng
             let late = if *seq == newest { String::new() } else { format!("\x1b[2m#{index}\x1b[0m ") };
             println!("{late}\x1b[36m{translation}\x1b[0m");
             let _ = std::io::stdout().flush();
-            let via = if google { "google" } else { "gemini" };
+            let via = if google { "google" } else { client.service.known().id };
             hub.publish(serde_json::json!({"type": "translation", "seq": seq, "tr": translation, "via": via}).to_string());
             false
         });
 
-        // top up from the newest passage seen, whether or not it is still waiting
-        let Some(index) = latest else { continue };
-        let missing: Vec<translate::Line> = {
-            let t = t.lock().unwrap();
-            (index..engine.len().min(index + 1 + LOOKAHEAD)).map(unit).filter(|l| t.cached(&l.text).is_none()).collect()
+        // a passage asked for anew goes alone and first; else top up from
+        // the newest passage seen, whether or not it is still waiting
+        if redo.is_some_and(|index| t.lock().unwrap().cached(&unit(index).text).is_some()) {
+            redo = None;
+        }
+        let Some(index) = redo.or(latest) else { continue };
+        let mut missing: Vec<translate::Line> = match redo {
+            Some(index) => vec![unit(index)],
+            None => {
+                let t = t.lock().unwrap();
+                (index..engine.len().min(index + 1 + LOOKAHEAD)).map(unit).filter(|l| t.cached(&l.text).is_none()).collect()
+            }
         };
         let urgent = waiting.iter().any(|(_, i)| *i == index);
         if missing.is_empty() || !(urgent || missing.len() > LOOKAHEAD / 2) || fetching.swap(true, Ordering::SeqCst) {
             continue;
         }
+        missing.truncate(batch.load(Ordering::SeqCst));
         let context: Vec<String> = (index.saturating_sub(CONTEXT)..index).map(|i| unit(i).text).collect();
         let only = urgent.then(|| unit(index));
-        let (client, t, fetching, hub) = (client.clone(), t.clone(), fetching.clone(), hub.clone());
+        let (client, t, fetching, batch, hub) = (client.clone(), t.clone(), fetching.clone(), batch.clone(), hub.clone());
         thread::spawn(move || {
-            let mut result = client.translate(&context, &missing).map(|tr| (missing, tr));
-            if let Err(e) = result.as_ref().map_err(String::clone) {
-                eprintln!("\x1b[33mtranslation failed: {e}\x1b[0m");
-                if let Some(only) = only.filter(|_| client.service != translate::Service::Google) {
-                    // the service is out: Google translates the passage being read, so
-                    // that the reader is not kept waiting
-                    let only = vec![only];
-                    result = client.google(&only).map(|tr| (only, (tr, translate::Via::Google)));
-                    match &result {
-                        Ok(_) => eprintln!("\x1b[33mthis passage is translated by Google instead\x1b[0m"),
-                        Err(e) => eprintln!("\x1b[33mGoogle failed as well: {e}\x1b[0m"),
+            let result = match client.translate(&context, &missing) {
+                Ok(translated) => Ok((missing, translated)),
+                Err(e) => {
+                    eprintln!("\x1b[33mtranslation failed: {e}\x1b[0m");
+                    let lasting = translate::lasting(&e);
+                    if lasting && missing.len() > 1 {
+                        let half = missing.len() / 2;
+                        eprintln!("\x1b[33masking for {half} passages at a time, to find the one the service will not take\x1b[0m");
+                        batch.store(half, Ordering::SeqCst);
+                        fetching.store(false, Ordering::SeqCst);
+                        return;
                     }
+                    // A passage the service will not take goes to Google for
+                    // good. When the service is out, Google translates the
+                    // passage being read for now, so that the reader is not
+                    // kept waiting.
+                    let instead = if lasting { Some(missing) } else { only.map(|only| vec![only]) };
+                    let mut result = Err(e.clone());
+                    if let Some(lines) = instead.filter(|_| client.service != translate::Service::Google) {
+                        result = client.google(&lines).map(|tr| (lines, (tr, translate::Via::Google)));
+                        match &result {
+                            Ok(_) => eprintln!("\x1b[33mthis passage is translated by Google instead\x1b[0m"),
+                            Err(e) => eprintln!("\x1b[33mGoogle failed as well: {e}\x1b[0m"),
+                        }
+                    }
+                    // said beside the passage if something has translated it, else in its
+                    // place; a passage not yet shown that was put right is not spoken of
+                    if urgent || !lasting || result.is_err() {
+                        let kind = if urgent && result.is_err() { "notice" } else { "hint" };
+                        hub.publish(explain::event(kind, &e));
+                    }
+                    if e.contains("429") {
+                        thread::sleep(Duration::from_secs(30));
+                    }
+                    result
                 }
-                // said beside the passage if something has translated it, else in its place
-                let kind = if urgent && result.is_err() { "notice" } else { "hint" };
-                hub.publish(explain::event(kind, &e));
-                if e.contains("429") {
-                    thread::sleep(Duration::from_secs(30));
-                }
-            }
+            };
             match result {
-                Ok((lines, (translations, via))) => t.lock().unwrap().store(&lines, translations, via),
+                Ok((lines, (translations, via))) => {
+                    if via == translate::Via::Model {
+                        let grown = (batch.load(Ordering::SeqCst) * 2).min(LOOKAHEAD + 1);
+                        batch.store(grown, Ordering::SeqCst);
+                    }
+                    t.lock().unwrap().store(&lines, translations, via);
+                }
                 // do not ask again at once: the loop would retry every tick
                 Err(_) => thread::sleep(RETRY_AFTER),
             }
             fetching.store(false, Ordering::SeqCst);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_guarded_panic_gives_none() {
+        assert_eq!(guarded(|| 1), Some(1));
+        assert_eq!(guarded(|| -> u32 { panic!("expected") }), None);
+        assert!(!GUARDED.get());
     }
 }

@@ -55,16 +55,37 @@ impl Hub {
             for stream in listener.incoming().flatten() {
                 let hub = hub.clone();
                 thread::spawn(move || {
-                    let _ = hub.handle(stream);
+                    let _ = hub.handle(stream, port);
                 });
             }
         });
         Ok(())
     }
 
-    fn handle(&self, mut stream: TcpStream) -> std::io::Result<()> {
+    fn handle(&self, mut stream: TcpStream, port: u16) -> std::io::Result<()> {
+        // a client that never finishes its request does not hold a thread for good
+        stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+        let mut reader = BufReader::new(stream.try_clone()?);
         let mut request = String::new();
-        BufReader::new(stream.try_clone()?).read_line(&mut request)?;
+        reader.read_line(&mut request)?;
+        let mut host = None;
+        loop {
+            let mut header = String::new();
+            if reader.read_line(&mut header)? == 0 || header.trim().is_empty() {
+                break;
+            }
+            if let Some((name, value)) = header.split_once(':') {
+                if name.trim().eq_ignore_ascii_case("host") {
+                    host = Some(value.trim().to_string());
+                }
+            }
+        }
+        // A web page elsewhere can have its own name point at this machine
+        // and so read the game's text through the browser; it gives that
+        // name as the host.
+        if !host.as_deref().is_some_and(|host| local(host, port)) {
+            return stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        }
         let path = request.split(' ').nth(1).unwrap_or("/");
         if !path.starts_with("/events") {
             let head = format!(
@@ -94,5 +115,23 @@ impl Hub {
             }
             stream.flush()?;
         }
+    }
+}
+
+/// Whether a request's host names this machine, as the page's own address does.
+fn local(host: &str, port: u16) -> bool {
+    let name = host.strip_suffix(&format!(":{port}")).unwrap_or(host);
+    ["127.0.0.1", "localhost"].iter().any(|own| name.eq_ignore_ascii_case(own))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_this_machine_is_served() {
+        assert!(local("127.0.0.1:8777", 8777) && local("localhost:8777", 8777) && local("LOCALHOST", 80));
+        assert!(!local("evil.example:8777", 8777) && !local("127.0.0.1.evil.example:8777", 8777));
+        assert!(!local("localhost:8777", 9000));
     }
 }
