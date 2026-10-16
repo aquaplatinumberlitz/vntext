@@ -1,4 +1,6 @@
 # vntext
+<img width="1338" height="934" alt="Screenshot_20261016_084456" src="https://github.com/user-attachments/assets/84075a7d-f99a-4463-84ab-943ce27ccdb4" />
+<img width="1338" height="934" alt="Screenshot_20261016_084618" src="https://github.com/user-attachments/assets/438b1c26-3786-4bf3-88f9-1997f06550c6" />
 
 Lấy text tiếng Nhật ra khỏi visual novel đang chạy trên Linux, hiện nó trong một dải nổi cạnh cửa sổ game, tra từ ngay trên đó và dịch máy cả đoạn.
 
