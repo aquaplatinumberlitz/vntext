@@ -21,6 +21,7 @@ Dự án cá nhân, chỉ chạy trên Linux. Tài liệu viết bằng tiếng 
 - [Cấu trúc dự án](#cấu-trúc-dự-án)
 - [Mở rộng engine khi gặp game mới](#mở-rộng-engine-khi-gặp-game-mới)
 - [Giới hạn](#giới-hạn)
+- [Port sang Windows (tham khảo)](#port-sang-windows-tham-khảo)
 - [So với Textractor và agent](#so-với-textractor-và-agent)
 - [Nguồn tham khảo](#nguồn-tham-khảo)
 
@@ -458,6 +459,50 @@ Trong lúc chưa có profile, game vẫn chơi được bằng OCR, hoặc bằn
 - **Khung lựa chọn** đã có ở mọi profile trừ shin (Umineko, Higurashi).
 - **Dải nổi cần layer-shell**: không chạy trên GNOME. Cửa sổ Wayland của game chỉ được hỗ trợ trên KDE.
 - **Bản game mới đổi cấu trúc engine** có thể làm một profile không tìm ra vị trí đọc. Khi đó tool báo không tìm thấy, không hiện sai text.
+
+## Port sang Windows (tham khảo)
+
+> **Chưa được thực hiện.** Mục này là bản phác thảo lý tưởng để ai muốn port có điểm xuất phát. Nó dựa trên việc đọc code, chưa build hay thử trên Windows. Hiện tool vẫn chỉ chạy trên Linux.
+
+Port khả thi. Lõi của tool (các engine) gần như không phụ thuộc hệ điều hành; phần phải làm lại là lớp đọc bộ nhớ và giao diện.
+
+### Phần dùng lại được
+
+- Mọi `engines/*/text.rs` chỉ xử lý byte (archive, giải mã, parse bytecode), chạy nguyên trên Windows.
+- Các `engines/*/mod.rs` chỉ chạm hệ điều hành qua bốn hàm của `mem::Proc`: `read`, `scan`/`scan_where`, `game_dirs`, `game_file(s)`. Cài lại `Proc` là đủ cho cả 11 engine.
+- Dùng lại nguyên: `dict/`, `yomitan.rs`, `translate.rs`, `web.rs`, `text.rs`, và các crate `rusqlite`, `ureq`, `serde_json`, `encoding_rs`.
+- Hai chỗ dùng `std::os::unix::fs::FileExt` (`engines/age/text.rs`, `engines/yuris/mod.rs`) đổi sang `std::os::windows::fs::FileExt::seek_read`.
+
+### Phần phải viết lại
+
+| Phần | Linux hiện tại | Windows |
+|---|---|---|
+| `mem.rs` | `/proc/<pid>/{maps,mem,pagemap}` | `OpenProcess`, `VirtualQueryEx` thay cho `maps`, `ReadProcessMemory` thay cho `mem` |
+| Quyền đọc (`doctor.rs`) | `kernel.yama.ptrace_scope` | Không cần; chỉ cần tool và game cùng mức quyền (game chạy admin thì tool cũng phải admin) |
+| Cửa sổ và chụp ảnh (`screen.rs`, `kwin.rs`) | x11rb, KWin | `EnumWindows`, `GetWindowRect`, `GetForegroundWindow`, chụp bằng `BitBlt` hoặc Windows.Graphics.Capture |
+| Dải nổi (`overlay.rs`) | GTK4 + layer-shell | Cửa sổ luôn nổi, trong suốt, bấm xuyên qua được (`WS_EX_TOPMOST`, `WS_EX_LAYERED`, `WS_EX_TRANSPARENT`), bám theo cửa sổ game |
+| Khay, cài đặt, launcher | `ksni`/`zbus`, symlink, `pkexec`, `xdg-open`, `wl-copy`, `libc::kill`, `prctl` | crate `tray-icon`, shortcut `.lnk`, `ShellExecute`, API clipboard, `TerminateProcess` và job object |
+
+Có thể bỏ hẳn nhánh Wayland/KWin/XWayland. Trên Windows game chạy native nên cũng không còn chuyện tìm tiến trình qua Wine hay Proton.
+
+### Cách làm đề xuất
+
+1. **Tách `Proc` theo nền tảng** bằng `#[cfg(unix)]` / `#[cfg(windows)]` (hoặc một trait), giữ nguyên chữ ký `read`, `scan`, `game_dirs`, `game_file`. Thêm `mem_windows.rs`; trong `Cargo.toml` chuyển `x11rb`, `libc`, `ksni`, `zbus`, `gtk4-layer-shell` vào `[target.'cfg(unix)'.dependencies]`.
+2. **Chạy bằng dòng lệnh trước**: in text của một engine đơn giản (BISHOP hoặc SPT) ra terminal. Mốc này cho thấy lõi chạy được khi chưa cần giao diện.
+3. **Dùng trang web làm giao diện tạm** (`web.rs`), để có thứ dùng được trước khi có dải nổi.
+4. **Làm dải nổi, khay và launcher cuối cùng.** Đây là phần tốn công nhất, riêng `overlay.rs` đã hơn 2.000 dòng. GTK4 chạy được trên Windows nhưng không có layer-shell, nên cần đặt cờ cửa sổ bằng Win32 hoặc đổi toolkit.
+
+### Điều cần kiểm tra khi làm thật
+
+- **`Proc::game_dirs`** hiện suy ra thư mục game từ `cwd` và cmdline của umu-run/proton. Trên Windows lấy từ `QueryFullProcessImageName`.
+- **Bộ lọc vùng nhớ** (`Mapping::wanted`) lọc theo quyền `rw` và loại vùng thiết bị. Cần ánh xạ sang `MEMORY_BASIC_INFORMATION` (`State`, `Protect`, `Type`).
+- **Quét `thorough`** dùng `pagemap` để bỏ qua trang chưa nằm trong RAM. Windows không có thứ rẻ tương đương (`QueryWorkingSetEx` chậm hơn), nên quét kỹ có thể chậm hơn.
+- **Offset bộ nhớ của từng engine** (YU-RIS, AGE, Ninetail…) là của chính game nên về nguyên tắc không đổi, nhưng README mới chỉ kiểm tra trên Proton. Cần thử lại từng engine trên bản Windows native.
+- **Shin trên Ryujinx** (Umineko, Higurashi) dựa vào cách Ryujinx cấp phát bộ nhớ guest trên Linux (`LIVE_CELL` trong `engines/shin/mod.rs`). Bản Windows của Ryujinx cấp phát khác, nên đây có thể là engine khó port nhất.
+- **Đường dẫn và tên file**: dấu phân cách `\`, không phân biệt hoa thường, tên Shift-JIS. Rà các chỗ so khớp tên file như `p.game_file(|name| name == ...)`.
+- **Tiến trình game chạy quyền admin** sẽ không đọc được nếu tool chạy quyền thường.
+
+Nếu chỉ cần đọc text game Windows mà không cần dịch trước hay tra từ trên dải nổi, [Textractor](https://github.com/Artikash/Textractor) vẫn là lựa chọn hợp lý hơn (xem mục bên dưới).
 
 ## So với Textractor và agent
 
