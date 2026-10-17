@@ -250,6 +250,7 @@ vntext auto ryujinx --web --translate                # không dải nổi, đọ
 | 封緘のグラセスタ | AGE của Eushully (SYS4) | Windows, Proton-GE qua Faugus | Chính xác từng khung thoại, kể cả khung lựa chọn, đã kiểm tra |
 | 信天翁航海録 | Liar-soft (script `.gsc`) | Windows, Proton-GE qua Faugus | Chính xác từng câu, kể cả khung lựa chọn, đã kiểm tra |
 | 廃村少女 弐 | Escu:de | Windows, Proton-GE qua Faugus | Chính xác từng trang thoại, đã kiểm tra (kể cả ngay sau khi load save) |
+| アマカノ ～Perfect Edition～ | CatSystem2 | Windows, Proton-GE qua Faugus | Chính xác từng lần click, có tên nhân vật chính, đã kiểm tra; chưa làm khung lựa chọn (game chọn trên bản đồ) |
 | Game engine khác | chưa có profile | cửa sổ X11 | Đọc khung thoại bằng ảnh chụp (lệnh `ocr` hoặc nút OCR trên dải nổi); đã kiểm tra |
 
 Nhiều hãng dùng chung engine, nên game không có trong bảng vẫn có thể chạy được: cứ mở vntext xem nó có nhận ra không.
@@ -272,7 +273,7 @@ src/
     mod.rs           Giao diện `Engine` chung và danh sách `DETECTORS`
     <tên>/mod.rs     Một profile: tìm script, theo dõi vị trí đang đọc
     <tên>/text.rs    Định dạng gói, script và text của engine đó
-                     (age, ark, bishop, escude, liar, med, ninetail, shin, spt, yuris)
+                     (age, ark, bishop, catsystem, escude, liar, med, ninetail, shin, spt, yuris)
 
   ocr.rs             Đọc khung thoại từ ảnh chụp qua Gemini
   screen.rs          Hỏi desktop về cửa sổ game: bản X11, bản KWin, bản ghép; nén ảnh
@@ -322,10 +323,9 @@ Profile engine là đường chính của tool: chỉ nó cho text đúng từng
 |---|---|---|---|
 | KiriKiri 2 / KiriKiri Z | `*.xp3`, `data.xp3` | Fate/stay night, G-senjou no Maou, 11eyes, Amairo＊Islenauts, Hello Lady!, Clover Day's. Nhớ là: các game Yuzusoft sau này, nhiều game Lilith | [krkrz/krkrz](https://github.com/krkrz/krkrz) (mã nguồn engine), [xmoezzz/KrkrExtract](https://github.com/xmoezzz/KrkrExtract), `ArcFormats/KiriKiri` của GARbro. Gói thường mã hoá riêng theo từng game; script là `.ks` (text) hoặc `.scn` (PSB nhị phân) |
 | SiglusEngine (VisualArt's) | `Scene.pck`, `Gameexe.dat`, `SiglusEngine.exe` | Nhớ là: Rewrite, Angel Beats!, game của SAGA PLANETS và Tone Work's | [xmoezzz/SiglusExtract](https://github.com/xmoezzz/SiglusExtract). `Scene.pck` nén và XOR bằng khoá riêng của game |
-| CatSystem2 | `*.int`, `cs2.exe` | Grisaia no Kajitsu/Meikyuu, Happiness! Re:Lucks, Shukufuku no Campanella, Kamikaze☆Explorer!, Sakigake⇒Generation!. Amakano và Amakano 2+ (theo yêu cầu hỗ trợ gửi GARbro: `.int`, gói mã hoá bằng khoá riêng). Nhớ là: Maitetsu | [trigger-segfault/TriggersTools.CatSystem2](https://github.com/trigger-segfault/TriggersTools.CatSystem2) (có wiki về định dạng). Script là `.cst` trong `scene.int` |
 | Artemis | `*.pfs`, `root.pfs` | Boku no Elf Onee-san, Tsugou no Ii Kanojo, Memory's Dogma. Nhớ là: Hamidashi Creative, Aonatsu Line, 9-nine- | `ArcFormats/Artemis` của GARbro. Script là text (`.ast`, Lua), nên phần giải mã nhẹ |
 
-   Game ví dụ lấy từ [bảng định dạng của GARbro](https://morkt.github.io/GARbro/supported.html); những tên sau chữ "nhớ là" chưa được kiểm chứng. Xếp theo số game thì KiriKiri đứng đầu, rồi tới Siglus, Artemis, CatSystem2.
+   Game ví dụ lấy từ [bảng định dạng của GARbro](https://morkt.github.io/GARbro/supported.html); những tên sau chữ "nhớ là" chưa được kiểm chứng. Xếp theo số game thì KiriKiri đứng đầu, rồi tới Siglus, Artemis. CatSystem2 đã có profile (`catsystem`).
 
 ### Bước 1: tìm nghiên cứu có sẵn
 
@@ -488,4 +488,6 @@ Dự án bắt đầu vì agent dừng hoạt động trên Ryujinx 1.3.3 sau kh
 - [Kelebek1/Eushully-Decompiler](https://github.com/Kelebek1/Eushully-Decompiler): định dạng script và gói của engine AGE.
 - [Love-in-idleness/LiarsoftTool](https://github.com/Love-in-idleness/LiarsoftTool): định dạng gói XFL và script GSC của Liar-soft.
 - [Chenx221/EscudeTools](https://github.com/Chenx221/EscudeTools): định dạng gói, database và script của Escu:de.
+- [GARbro, ArcINT.cs](https://github.com/morkt/GARbro/blob/master/ArcFormats/CatSystem/ArcINT.cs): gói `.int` (KIF) của CatSystem2 và cách lấy khoá từ file exe.
+- [trigger-segfault/TriggersTools.CatSystem2](https://github.com/trigger-segfault/TriggersTools.CatSystem2): định dạng script `.cst` (CatScene) của CatSystem2.
 - [yomidevs/yomitan](https://github.com/yomidevs/yomitan): bảng luật chia từ và các bộ tiền xử lý chữ tiếng Nhật mà `src/dict/` dùng lại; cách trình bày popup tra từ.

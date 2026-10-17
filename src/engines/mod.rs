@@ -10,6 +10,7 @@ use crate::mem::Proc;
 pub mod age;
 pub mod ark;
 pub mod bishop;
+pub mod catsystem;
 pub mod escude;
 pub mod liar;
 pub mod med;
@@ -68,7 +69,7 @@ pub trait Engine: Send + Sync {
 type Detector = fn(&Proc) -> Option<Box<dyn Engine>>;
 
 /// Tried in order; the ones that only look at the game's files come first.
-const DETECTORS: &[Detector] = &[spt::detect, med::detect, ark::detect, ninetail::detect, age::detect, liar::detect, escude::detect, yuris::detect, shin::detect, bishop::detect];
+const DETECTORS: &[Detector] = &[spt::detect, med::detect, catsystem::detect, ark::detect, ninetail::detect, age::detect, liar::detect, escude::detect, yuris::detect, shin::detect, bishop::detect];
 
 /// Returns the profile of the first engine recognised in the process. A
 /// profile that panics on files it does not expect is passed over: every

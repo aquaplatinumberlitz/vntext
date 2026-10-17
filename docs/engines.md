@@ -111,6 +111,19 @@ Profile escude (`engines/escude/`), cho engine của Escu:de (廃村少女 弐):
 
 Game đóng gói luôn mã nguồn engine của nó trong `haison2.bin`; ý nghĩa các lệnh và cấu trúc `SCR_ENV` lấy từ đó. Định dạng gói, database và script lấy từ [Chenx221/EscudeTools](https://github.com/Chenx221/EscudeTools).
 
+## catsystem: CatSystem2
+
+Profile catsystem (`engines/catsystem/`), cho CatSystem2 (アマカノ ～Perfect Edition～):
+
+1. Script là các file `.cst` trong gói `scene.int`. Gói `.int` bắt đầu bằng `KIF`, rồi bảng file mỗi mục 0x48 byte (tên 64 byte, vị trí, độ dài). Nếu mục đầu là `__key__.dat` thì gói bị mã hoá. Khi đó khoá Blowfish của gói sinh từ độ dài ghi ở mục đó, qua Mersenne twister seed kiểu cũ (69069). Tên file xáo theo một bảng chữ cái đảo ngược, với khoá sinh từ khoá chính cộng số thứ tự. Khoá chính là CRC của một mật khẩu nằm trong resource `V_CODE2` của file exe; resource này lại mã hoá Blowfish bằng `KEY_CODE` (mỗi byte XOR `0xCD`). Tool thử mọi file exe đang map trong tiến trình để tìm khoá.
+2. File `.cst` gồm `CatScene`, hai độ dài, rồi dữ liệu zlib. Script bên trong có header bốn số, bảng "input", bảng vị trí dòng và các dòng. Mỗi dòng có loại 2 byte và một chuỗi Shift-JIS: `0x2001` là thoại, `0x2101` là tên người nói, `0x0201` là chỗ chờ click, `0x3001` là lệnh. Input là đoạn dòng giữa hai lần click; bảng input ghi số dòng và dòng đầu của từng đoạn. Mỗi input có thoại là một passage.
+3. Trong text, `[chữ/cách đọc]` là furigana (giữ chữ), `\n` là xuống dòng, `\@` là đi tiếp không chờ click, `\fss`, `\fl`… là cỡ chữ. `$strN` là biến chuỗi, ví dụ `$str10` là họ và `$str20` là tên nhân vật chính.
+4. Trong RAM, trình thông dịch có bản ghi: con trỏ tới ô giữ scene đang nạp, tên scene (32 byte), số input và số dòng trong input. Khi chữ đang chờ click thì số dòng bằng số dòng của input đó. Game còn giữ vài bản sao của bản ghi này. Bản sống là bản có ô giữ scene trỏ tới đối tượng script mà con trỏ header (`+0x0C`) chỉ đúng header của scene ghi trong tên, nên tool tin ngay bản đó.
+5. Biến chuỗi nằm trong một `std::map<int, std::string>` của MSVC 32-bit: mỗi nút gồm trái, cha, phải, màu, cờ head, khoá ở `+0x10`, string ở `+0x14`. Tool tìm nút mang biến mà text dùng tới, leo lên head rồi tra ngược lại để chắc chắn đó đúng là map. Sau đó cứ 0,5 giây đọc lại một lần. Biến chưa có giá trị (chẳng hạn chưa đặt tên) thì lấy giá trị mặc định từ các dòng `strvar g_PLAYER_FIRSTNAME 勇希` trong các màn hình `.fes` của `fes.int`.
+6. Lựa chọn của アマカノ là chọn địa điểm trên bản đồ (màn hình `mapselect.fes`), không phải menu chữ, nên chưa làm.
+
+Định dạng gói và cách lấy khoá lấy từ `ArcINT.cs` của [GARbro](https://github.com/morkt/GARbro). Định dạng `.cst` lấy từ [TriggersTools.CatSystem2](https://github.com/trigger-segfault/TriggersTools.CatSystem2). Bản ghi vị trí và map biến chuỗi được tìm bằng cách đo trên game đang chạy, kết hợp đọc hàm nạp script (`CatScene`) trong exe bằng IDA.
+
 ## liar: Liar-soft (gsc)
 
 Profile liar (`engines/liar/`), cho engine của Liar-soft (信天翁航海録):
