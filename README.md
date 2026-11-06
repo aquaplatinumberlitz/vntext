@@ -134,7 +134,8 @@ Desktop không có khay thì đóng cửa sổ là thoát.
 ### Dải nổi
 
 Dải bám theo cửa sổ game và chỉ hiện khi game được chọn. Dải đặt dưới cửa sổ;
-nếu thiếu chỗ thì đặt bên trong phía trên. Tên người nói, câu Nhật và bản dịch
+nếu thiếu chỗ thì đặt bên trong sát đáy game. Thanh điều khiển và nội dung
+nằm trong **một khung nền mờ**, cùng di chuyển và đổi kích thước. Tên người nói, câu Nhật và bản dịch
 có phân cấp màu; nguồn text và dịch nằm ở hàng phụ. Đoạn dài có vùng cuộn riêng.
 Nhãn **Bản dịch / Nhật / Nhật + dịch** dùng được với mọi ngôn ngữ đích.
 
@@ -142,27 +143,42 @@ Nút **loa nằm ngay bên phải câu Nhật trên dải**, đổi thành nút 
 tạo hoặc phát audio. Ở chế độ chỉ hiện bản dịch, loa vẫn ở cạnh câu thoại
 và đọc câu Nhật gốc. Chưa chọn giọng thì bấm loa sẽ mở tab Giọng đọc.
 
-Thanh công cụ bên phải có bốn nút:
+Hàng điều khiển trên đầu dải dịu đi khi chuột rời khung, không làm đổi bố cục:
 
 | Nút | Tác dụng |
 |---|---|
-| Ẩn/hiện | Ẩn dải, vẫn giữ thanh công cụ để hiện lại. |
 | Chế độ | Đổi bản dịch, câu Nhật hoặc cả hai; nút ghi rõ chế độ hiện tại. |
-| ⋯ | Khóa vị trí dải, chép câu đang hiện, mở OCR, dừng theo dõi game. |
-| Bánh răng | Thiết lập Hiển thị, Dịch, Từ điển và OCR. |
+| ⋯ | Chỉnh bố cục, chép câu đang hiện, mở OCR, dừng theo dõi game. |
+| Bánh răng | Thiết lập Hiển thị, Dịch, Từ điển, OCR và Giọng đọc. |
+| Thu gọn (−) | Gấp cả khung thành nút **vntext · Hiện** tại chỗ; bấm nút này để mở lại. |
 
-**Khóa vị trí** chỉ khóa di chuyển/đổi bề rộng. Quét chữ Nhật và rê chuột
-tra từ luôn dùng được. Bỏ khóa trong menu ⋯ hoặc tab Hiển thị để kéo `⠿`
-và `↔`. Bôi chọn mặc định không ghi đè clipboard; chuột phải chọn **Chép
+**Chỉnh bố cục:** mở **⋯ → Chỉnh bố cục…** hoặc nút cùng tên trong tab
+Hiển thị. Dải hiện viền và tay nắm ở bốn cạnh/bốn góc. Kéo vùng **⠿ Kéo để
+di chuyển** trên tiêu đề để dời dải; kéo cạnh hoặc góc để đổi cả chiều rộng
+và chiều cao. Các nút trên tiêu đề vẫn dùng bình thường. Vị trí/kích thước
+tự lưu riêng theo game, bám theo cửa sổ game và được giữ trong màn hình.
+
+Trong chế độ chỉnh có thanh **Độ đậm nền** (20–100%) xem thay đổi ngay;
+chỉ nền thay đổi, chữ và nút vẫn rõ. **Chiều cao tự động** mặc định bật.
+Kéo cạnh trên/dưới hoặc góc sẽ dùng chiều cao cố định; câu dài cuộn bên
+trong, thanh điều khiển vẫn hiện. Bật lại ô này để dải tự co giãn theo nội
+dung. **Đặt lại** khôi phục vị trí, kích thước và độ đậm nền mặc định, giữ
+cỡ chữ/màu/chế độ đang dùng. Bấm **Xong** để khóa thao tác kéo và ẩn công cụ
+chỉnh. Thu gọn dải cũng kết thúc chế độ chỉnh.
+
+Quét chữ Nhật và rê chuột tra từ luôn dùng được. Bôi chọn mặc định không
+ghi đè clipboard; chuột phải chọn **Chép
 phần đã chọn**. Có tùy chọn **Tự chép phần chữ đã chọn**, tự lưu theo ứng dụng.
 Ở chế độ chỉ bản dịch và đang khóa vị trí, vùng trống vẫn cho click xuyên
 xuống game; các nút trên dải nhận chuột bình thường.
 
-**Lịch sử:** bấm trước/sau hoặc lăn chuột trên hàng điều khiển lịch sử.
+**Lịch sử:** mặc định là nút nhỏ **Lịch sử · N câu**; bấm để mở các nút
+trước/sau, hoặc lăn chuột ngay trên hàng này để xem lại.
 Cuộn trong vùng câu thoại chỉ cuộn đoạn dài. Khi xem câu cũ, nhãn ghi rõ
 **Lịch sử · số câu/tổng số**. Game chuyển câu không kéo người đọc khỏi lịch
 sử; bấm **Về câu mới** để tiếp tục theo dõi. Tool giữ tối đa 200 câu; câu
-cũ nhất sẽ rời bộ đệm khi đầy. Có câu mới trong game không tự phát âm thanh.
+cũ nhất sẽ rời bộ đệm khi đầy. Khi đang ở câu mới nhất, bấm **Thu gọn** trên
+hàng lịch sử để trở về nút nhỏ. Có câu mới trong game không tự phát âm thanh.
 
 **Thông báo:** nằm cạnh câu thoại, có nút đóng riêng. Thông báo lưu/đổi nguồn
 thành công tự hết sau 5 giây; lỗi giữ lời giải thích và nút khắc phục.
@@ -328,7 +344,7 @@ vntext auto ryujinx --web --translate                # không dải nổi, đọ
 | File | Nội dung |
 |---|---|
 | `~/.config/vntext/games.json` | Tuỳ chọn của từng game trong cửa sổ chọn game |
-| `~/.config/vntext/overlay.json` | Vị trí, cỡ chữ, màu, chế độ của dải theo từng game |
+| `~/.config/vntext/overlay.json` | Vị trí, bề rộng, chiều cao tự động/cố định, độ đậm nền, cỡ chữ, màu, chế độ của dải theo từng game |
 | `~/.config/vntext/translate.json` | Nguồn dịch, key, model (quyền 0600) |
 | `~/.config/vntext/regions.tsv` | Khung thoại đã khoanh cho OCR, theo từng game |
 | `~/.config/vntext/lookup.json` | Nguồn tra từ đã chọn |

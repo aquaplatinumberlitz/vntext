@@ -1,10 +1,5 @@
-//! What floats by the game's window: a strip with the message the game is
-//! on, and a bar of buttons to set the strip up and to have the game's text
-//! box read from pictures.
-//!
-//! Both are layer-shell surfaces, the only kind of window that a Wayland
-//! compositor lets a program place and keep above the others. The strip
-//! lets clicks through where no text or controls need the pointer.
+//! One floating panel holds the message and its controls. It can fold into
+//! a small restore button without losing its place by the game's window.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -32,8 +27,6 @@ use crate::{mem, ocr, tts, web, yomitan};
 const TICK: Duration = Duration::from_millis(100);
 /// Between the game's window and what floats by it.
 const GAP: i32 = 6;
-/// How wide the bar of buttons is taken to be when a place is found for it.
-const BAR: i32 = 84;
 /// Successful actions should not leave a permanent banner over the game.
 const TOAST: Duration = Duration::from_secs(5);
 /// Shown while a message waits for its translation.
@@ -52,6 +45,8 @@ const COLOUR: &str = COLOURS[0];
 /// game is named that.
 const INTRO_KEY: &str = "@intro";
 const NARROWEST: i32 = 200;
+/// A manual viewport must leave room for the header and a line of text.
+const SHORTEST: i32 = 140;
 /// How much of the text from the pointer on is looked up: the longest word
 /// it starts with is found.
 const LOOKED_UP: usize = 20;
@@ -108,13 +103,6 @@ window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
 .vntext .meaning label.meant { font-size: 12px; color: #b0b0b8; }
 .vntext .meaning flowboxchild { padding: 0; min-width: 0; min-height: 0; }
 .vntext .meaning separator { background: #4a4c5c; margin: 6px 0; }
-.vntext .bar { background: rgba(0, 0, 0, 0.72); border-radius: 8px; padding: 4px; opacity: 0.5; transition: opacity 150ms; }
-.vntext .bar:hover { opacity: 1; }
-.vntext .bar button { min-height: 0; min-width: 0; padding: 4px 6px; margin: 1px; font-size: 11px;
-    color: white; background: rgba(255, 255, 255, 0.12); border: none; box-shadow: none; }
-.vntext .bar button:hover { background: rgba(255, 255, 255, 0.3); }
-.vntext .bar button.on { background: #e0a458; color: black; }
-.vntext .bar.menu { opacity: 1; background: rgba(24, 24, 24, 0.97); }
 .vntext-ask .box { background: #1e1e1e; border-radius: 10px; padding: 12px 14px; }
 .vntext-ask .box label { color: #bbb; font-size: 12px; }
 .vntext-ask .box button label { color: black; font-size: 13px; }
@@ -148,6 +136,25 @@ window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
 .vntext-ask .box list label { color: #e8e8e8; }
 .vntext-pick label { color: white; font-size: 20px; background: rgba(0, 0, 0, 0.8); padding: 8px 16px; border-radius: 8px; }
 .vntext .strip { border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 10px 14px; }
+.vntext .strip .panel-header { opacity: 0.72; transition: opacity 180ms ease; }
+.vntext .strip .panel-header.active { opacity: 1; }
+.vntext .strip .panel-header button, .vntext .strip button.restore { min-height: 22px; min-width: 22px; padding: 5px 7px; border-radius: 7px; background: rgba(255, 255, 255, 0.08); color: #e6edf7; border: none; box-shadow: none; }
+.vntext .strip .panel-header button:hover, .vntext .strip button.restore:hover { background: rgba(255, 255, 255, 0.18); }
+.vntext .strip .panel-header label, .vntext .strip button.restore label { font-size: 12px; text-shadow: none; }
+.vntext .strip .panel-header label.panel-title { font-size: 13px; font-weight: bold; color: #aeb7c8; }
+.vntext .strip.collapsed { padding: 4px; }
+.vntext .strip.editing { border-color: #e0a458; }
+.vntext .strip.editing .panel-header { opacity: 1; }
+.vntext .strip .layout-editor { padding: 5px 0; }
+.vntext .strip .layout-editor label { font-size: 12px; text-shadow: none; }
+.vntext .strip .layout-editor button { min-height: 22px; padding: 4px 8px; border: none; box-shadow: none; border-radius: 6px; background: #293548; color: #e6edf7; }
+.vntext .strip .layout-editor button.done { background: #e0a458; color: #171b24; }
+.vntext .strip .layout-editor button.done label { color: #171b24; }
+.vntext .strip .layout-editor scale trough { background: #3b485d; }
+.vntext .strip .layout-editor scale highlight { background: #e0a458; }
+.vntext .resize-handle { background: rgba(224, 164, 88, 0.4); border-radius: 3px; }
+.vntext .resize-handle:hover { background: #e0a458; }
+.vntext .strip label.intro { font-size: 14px; }
 .vntext .strip label.source { font-size: 11px; padding: 0; color: #aeb7c8; }
 .vntext .strip label.caption, .vntext .strip label.hinted { font-size: 12px; text-shadow: none; }
 .vntext .strip .history { padding-top: 5px; }
@@ -162,8 +169,6 @@ window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
 .vntext .strip button.listen { min-width: 24px; min-height: 24px; padding: 5px; border-radius: 7px; background: #293548; color: #e6edf7; border: none; box-shadow: none; }
 .vntext .strip button.listen:hover { background: #3b4b64; }
 .vntext .strip button.listen.on { background: #e0a458; color: #171b24; }
-.vntext .bar { background: rgba(20, 25, 35, 0.94); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; opacity: 0.8; }
-.vntext .bar button { min-height: 24px; min-width: 24px; padding: 4px; font-size: 12px; border-radius: 7px; }
 .vntext-menu contents { background: #18202d; color: #e6edf7; border: 1px solid #354155; border-radius: 10px; padding: 8px; }
 .vntext-menu button { min-height: 28px; padding: 4px 10px; background: #252f40; color: #e6edf7; border: none; box-shadow: none; }
 .vntext-menu button:hover { background: #354155; }
@@ -247,13 +252,15 @@ struct Look {
     /// where the strip is from the top left corner of the game's window and
     /// how wide; `None` to have it put by the window
     place: Option<(i32, i32, i32)>,
+    /// Total expanded height, or automatic sizing from the message.
+    height: Option<i32>,
     hidden: bool,
     copy: bool,
 }
 
 impl Default for Look {
     fn default() -> Look {
-        Look { font: FONT, opacity: OPACITY, colour: COLOUR.to_string(), mode: Mode::Translation, place: None, hidden: false, copy: false }
+        Look { font: FONT, opacity: OPACITY, colour: COLOUR.to_string(), mode: Mode::Translation, place: None, height: None, hidden: false, copy: false }
     }
 }
 
@@ -267,6 +274,7 @@ impl Look {
             colour: saved["colour"].as_str().filter(|c| is_colour(c)).unwrap_or(COLOUR).to_string(),
             mode: Mode::ALL.iter().find(|m| saved["mode"] == m.1).map_or(Mode::Translation, |m| m.0),
             place: place.filter(|p| p.2 >= NARROWEST),
+            height: number(&saved["height"]).filter(|h| *h >= SHORTEST),
             hidden: saved["hidden"] == true,
             copy: saved["copy"] == true,
         }
@@ -274,7 +282,7 @@ impl Look {
 
     fn to_json(&self) -> Value {
         let mode = Mode::ALL.iter().find(|m| m.0 == self.mode).unwrap().1;
-        json!({"font": self.font, "opacity": self.opacity, "colour": self.colour, "mode": mode, "place": self.place.map(|p| [p.0, p.1, p.2]), "hidden": self.hidden, "copy": self.copy})
+        json!({"font": self.font, "opacity": self.opacity, "colour": self.colour, "mode": mode, "place": self.place.map(|p| [p.0, p.1, p.2]), "height": self.height, "hidden": self.hidden, "copy": self.copy})
     }
 }
 
@@ -293,6 +301,34 @@ fn strip_style(look: &Look) -> (String, String) {
         format!(".vntext .strip {{ background: rgba(0, 0, 0, {:.2}); }} .vntext .strip label {{ font-size: {}px; }}", look.opacity, look.font),
         format!(".vntext .strip label.japanese, .vntext .strip label.alone {{ color: {}; }}", look.colour),
     )
+}
+
+/// Keep the expanded panel inside its output, even when its button is folded.
+fn panel(game: (i32, i32, i32, i32), saved: Option<(i32, i32, i32)>, screen: (i32, i32, i32, i32), minimum: i32, tall: i32) -> (i32, i32, i32) {
+    let (x, y, width, height) = game;
+    let (left, top, wide, high) = screen;
+    let (px, py, wanted) = saved.map_or((x, y + height + GAP, width), |(dx, dy, w)| (x + dx, y + dy, w));
+    let width = wanted.max(minimum).min(wide.max(1));
+    let py = if saved.is_none() && py + tall > top + high { y + height - tall - GAP } else { py };
+    (px.clamp(left, left + wide - width), py.clamp(top, top + (high - tall).max(0)), width)
+}
+
+/// Resize the chosen edges, keeping the opposite edges still and the panel on screen.
+fn resized(rect: (i32, i32, i32, i32), delta: (i32, i32), edges: (i32, i32), minimum: (i32, i32), screen: (i32, i32, i32, i32)) -> (i32, i32, i32, i32) {
+    fn axis(pos: i32, size: i32, delta: i32, edge: i32, min: i32, start: i32, space: i32) -> (i32, i32) {
+        let end = start + space;
+        let min = min.min(space);
+        let size = size.clamp(min, space);
+        let pos = pos.clamp(start, end - size);
+        match edge {
+            -1 => { let next = (pos + delta).clamp(start, pos + size - min); (next, pos + size - next) }
+            1 => (pos, (size + delta).clamp(min, end - pos)),
+            _ => (pos, size),
+        }
+    }
+    let (x, w) = axis(rect.0, rect.2, delta.0, edges.0, minimum.0, screen.0, screen.2);
+    let (y, h) = axis(rect.1, rect.3, delta.1, edges.1, minimum.1, screen.1, screen.3);
+    (x, y, w, h)
 }
 
 /// The file of looks: a JSON object with one look for each game.
@@ -533,6 +569,8 @@ struct Ui {
     /// been on neither that nor a word
     over_meaning: bool,
     away: u32,
+    history_open: bool,
+    expanded_height: i32,
 }
 
 struct Overlay {
@@ -575,14 +613,28 @@ struct Overlay {
     next: gtk4::Button,
     latest: gtk4::Button,
     offer: Cell<Option<Action>>,
-    grips: [gtk4::Label; 2],
+    move_area: gtk4::Box,
+    title: gtk4::Label,
+    handles: Vec<((i32, i32), gtk4::Box)>,
+    editor: gtk4::Box,
+    done: gtk4::Button,
+    opacity: gtk4::Scale,
+    opacity_now: gtk4::Label,
+    automatic: gtk4::CheckButton,
+    reset: gtk4::Button,
+    layout_sync: Cell<bool>,
     /// the meaning of the word under the pointer, from the dictionaries
     popup: gtk4::Window,
     meaning: gtk4::Box,
     scrolled: gtk4::ScrolledWindow,
     asks: Sender<(u64, String)>,
     answers: Receiver<(u64, Result<yomitan::Found, Trouble>)>,
-    bar: gtk4::Window,
+    header: gtk4::Box,
+    body: gtk4::Box,
+    restore: gtk4::Button,
+    history_summary: gtk4::Button,
+    history_controls: gtk4::Box,
+    empty: gtk4::Label,
     hide: gtk4::Button,
     mode: gtk4::Button,
     /// says on the button which of a message is shown
@@ -1010,78 +1062,114 @@ impl Overlay {
         }
         self.japanese.set_selectable(true);
         self.listen.set_visible(!ui.intro && !ui.shown.messages.is_empty());
-        self.grips.iter().for_each(|grip| grip.set_visible(!ui.locked));
+        let editing = !ui.locked && !ui.look.hidden;
+        self.handles.iter().for_each(|(_, handle)| handle.set_visible(editing));
+        self.editor.set_visible(editing);
+        self.move_area.set_cursor_from_name(editing.then_some("move"));
+        self.move_area.set_tooltip_text(editing.then_some("Kéo hàng tiêu đề để di chuyển dải"));
+        self.title.set_text(if editing { "⠿ Kéo để di chuyển" } else { "vntext" });
+        if editing { self.content.add_css_class("editing"); } else { self.content.remove_css_class("editing"); }
+        self.layout_sync.set(true);
+        self.opacity.set_value(ui.look.opacity);
+        self.opacity_now.set_text(&format!("{:.0}%", ui.look.opacity * 100.0));
+        self.automatic.set_active(ui.look.height.is_none());
+        self.layout_sync.set(false);
         self.mode_now.set_text(ui.look.mode.label());
-        self.hide.set_icon_name(if ui.look.hidden { "view-conceal-symbolic" } else { "view-reveal-symbolic" });
-        switch(&self.hide, ui.look.hidden);
+        self.header.set_visible(!ui.look.hidden);
+        self.body.set_visible(!ui.look.hidden);
+        self.restore.set_visible(ui.look.hidden);
+        if ui.look.hidden {
+            self.content.add_css_class("collapsed");
+            self.popup.set_visible(false);
+            if ui.hover.is_some() || ui.asked.is_some() {
+                (ui.hover, ui.asked) = (None, None);
+                ui.lookups += 1;
+                self.japanese.set_attributes(None);
+            }
+        } else {
+            self.content.remove_css_class("collapsed");
+        }
+        self.empty.set_visible(ui.shown.messages.is_empty() && !ui.intro && offered.is_none());
         self.history.set_visible(ui.shown.messages.len() > 1 && !ui.intro);
+        let details = ui.history_open || ui.shown.old().is_some();
+        self.history_summary.set_visible(!details);
+        self.history_summary.set_label(&format!("Lịch sử · {} câu", ui.shown.messages.len()));
+        self.history_controls.set_visible(details);
         self.previous.set_sensitive(ui.shown.at > 0);
         self.next.set_sensitive(ui.shown.old().is_some());
-        self.latest.set_visible(ui.shown.old().is_some());
+        self.latest.set_label(if ui.shown.old().is_some() { "Về câu mới" } else { "Thu gọn" });
         self.position.set_text(&match ui.shown.old() {
             Some((at, of)) => format!("Lịch sử · {at}/{of}"),
             None => "Câu mới nhất".to_string(),
         });
     }
 
-    /// Puts the strip and the bar where they belong by the game's window,
+    /// Puts the panel where it belongs by the game's window,
     /// or out of sight while the game is not the window being played.
     fn place(&self) {
         let mut ui = self.ui.borrow_mut();
         let Some((x, y, width, height)) = ui.placed.filter(|_| !ui.picking) else {
             self.strip.set_visible(false);
             self.popup.set_visible(false);
-            self.bar.set_visible(false);
             return;
         };
         let monitors = self.display.monitors();
-        let screens: Vec<gdk::Rectangle> = monitors.into_iter().flatten().filter_map(|m| m.downcast::<gdk::Monitor>().ok()).map(|m| m.geometry()).collect();
-        let right = screens.iter().map(|s| s.x() + s.width()).max();
-        let bottom = screens.iter().map(|s| s.y() + s.height()).max();
-        self.text_scroll.set_max_content_height((height / 3).clamp(100, 360));
-
-        let strip = match ui.look.place {
-            Some((dx, dy, wide)) => (x + dx, y + dy, wide),
-            None => {
-                // below the game's window, or at the top of it when there is no room below
-                let tall = self.strip.height().max(self.content.measure(gtk4::Orientation::Vertical, width).1);
-                let below = y + height + GAP;
-                (x, if bottom.is_none_or(|bottom| below + tall <= bottom) { below } else { y + GAP }, width)
-            }
-        };
-        ui.strip = strip;
-        self.content.set_size_request(strip.2, -1);
-        self.strip.set_default_size(strip.2, -1);
-        self.strip.set_margin(Edge::Left, strip.0.max(0));
-        self.strip.set_margin(Edge::Top, strip.1.max(0));
-        let (japanese, translation, _) = ui.shown.texts(ui.look.mode);
-        self.strip.set_visible(!ui.look.hidden && (japanese.is_some() || translation.is_some() || ui.intro || ui.shown.offered().is_some()));
-        if let Some(surface) = self.strip.surface() {
-            // Locked, the strip lets the pointer through, unless it shows
-            // Japanese: then words are looked up under the pointer.
-            let all = cairo::RectangleInt::new(0, 0, self.strip.width(), self.strip.height());
-            let through = ui.locked && japanese.is_none() && !ui.intro;
-            // ...save for the buttons that say who translates and offer a remedy
-            let taking = if through {
-                let taking = cairo::Region::create();
-                for button in [&self.service, &self.hint, &self.dismiss, &self.previous, &self.next, &self.latest, &self.listen] {
-                    if let Some(b) = button.compute_bounds(&self.strip).filter(|_| button.is_visible() && button.is_mapped()) {
-                        let _ = taking.union_rectangle(&cairo::RectangleInt::new(b.x() as i32, b.y() as i32, b.width().ceil() as i32, b.height().ceil() as i32));
-                    }
-                }
-                taking
-            } else {
-                cairo::Region::create_rectangle(&all)
-            };
-            surface.set_input_region(Some(&taking));
+        let screens: Vec<gdk::Monitor> = monitors.into_iter().flatten().filter_map(|m| m.downcast::<gdk::Monitor>().ok()).collect();
+        let monitor = screens.iter().min_by_key(|m| {
+            let s = m.geometry();
+            let cx = x + width / 2;
+            let cy = y + height / 2;
+            (cx - cx.clamp(s.x(), s.x() + s.width())).abs() + (cy - cy.clamp(s.y(), s.y() + s.height())).abs()
+        });
+        let bounds = monitor.map(|m| m.geometry()).unwrap_or_else(|| gdk::Rectangle::new(0, 0, width, height));
+        if self.strip.monitor().as_ref() != monitor {
+            self.strip.set_monitor(monitor);
+            self.popup.set_monitor(monitor);
         }
+        let fixed = ui.look.height.is_some() && !ui.look.hidden;
+        self.text_scroll.set_max_content_height(-1);
+        self.text_scroll.set_min_content_height(if fixed { 48 } else { -1 });
+        self.text_scroll.set_max_content_height(if fixed { -1 } else { (height / 3).clamp(100, 360) });
+        self.text_scroll.set_propagate_natural_height(!fixed);
+        self.text_scroll.set_vexpand(fixed);
+        self.body.set_vexpand(fixed);
+        let minimum = if ui.look.hidden { ui.strip.2.max(NARROWEST) } else {
+            (self.header.measure(gtk4::Orientation::Horizontal, -1).0.max(self.editor.measure(gtk4::Orientation::Horizontal, -1).0) + 30).max(NARROWEST)
+        };
+        let screen = (bounds.x(), bounds.y(), bounds.width(), bounds.height());
+        let wide = panel((x, y, width, height), ui.look.place, screen, minimum, ui.expanded_height).2;
+        self.content.set_size_request(if ui.look.hidden { -1 } else { wide }, -1);
+        if !ui.look.hidden {
+            let (minimum, natural, _, _) = self.content.measure(gtk4::Orientation::Vertical, wide);
+            ui.expanded_height = ui.look.height.map_or(natural, |h| h.max(SHORTEST).max(minimum)).min(bounds.height());
+            self.content.set_size_request(wide, if fixed { ui.expanded_height } else { -1 });
+        }
+        let strip = panel((x, y, width, height), ui.look.place, screen, minimum, ui.expanded_height);
+        ui.strip = strip;
+        self.strip.set_default_size(if ui.look.hidden { 1 } else { strip.2 }, if ui.look.hidden { 1 } else { ui.expanded_height });
+        self.strip.set_margin(Edge::Left, strip.0 - bounds.x());
+        self.strip.set_margin(Edge::Top, strip.1 - bounds.y());
+        let (japanese, _, _) = ui.shown.texts(ui.look.mode);
+        self.strip.set_visible(true);
+        if let Some(surface) = self.strip.surface() {
+            let through = ui.locked && japanese.is_none() && !ui.intro;
+            surface.set_input_region(Some(&self.input(through)));
+        }
+    }
 
-        // right of the game's window, or along its right edge when there is no room
-        let beside = x + width + GAP;
-        let bar = if right.is_none_or(|right| beside + BAR <= right) { beside } else { x + width - BAR - GAP };
-        self.bar.set_margin(Edge::Left, bar.max(0));
-        self.bar.set_margin(Edge::Top, y.max(0));
-        self.bar.set_visible(true);
+    /// Translation-only leaves the game clickable while all controls still work.
+    fn input(&self, through: bool) -> cairo::Region {
+        if !through {
+            return cairo::Region::create_rectangle(&cairo::RectangleInt::new(0, 0, self.strip.width(), self.strip.height()));
+        }
+        let taking = cairo::Region::create();
+        let widgets: [&gtk4::Widget; 10] = [self.header.upcast_ref(), self.restore.upcast_ref(), self.history_summary.upcast_ref(), self.service.upcast_ref(), self.hint.upcast_ref(), self.dismiss.upcast_ref(), self.previous.upcast_ref(), self.next.upcast_ref(), self.latest.upcast_ref(), self.listen.upcast_ref()];
+        for button in widgets {
+            if let Some(b) = button.compute_bounds(&self.strip).filter(|_| button.is_visible() && button.is_mapped()) {
+                let _ = taking.union_rectangle(&cairo::RectangleInt::new(b.x().floor() as i32, b.y().floor() as i32, b.width().ceil() as i32, b.height().ceil() as i32));
+            }
+        }
+        taking
     }
 
     fn tick(self: &Rc<Self>) {
@@ -1148,6 +1236,7 @@ impl Overlay {
     /// Looks up the word under the pointer, and shows what was found by the
     /// strip, the word marked in the message.
     fn look_up(self: &Rc<Self>, ui: &mut Ui) {
+        if ui.look.hidden { return; }
         // The meaning stays while the pointer is on its word or on the
         // meaning itself, and a moment longer: the way from one to the
         // other leads over neither.
@@ -1224,15 +1313,15 @@ impl Overlay {
         self.scrolled.vadjustment().set_value(0.0);
         // under the word, or above the strip when there is no room below
         let tall = (self.meaning.measure(gtk4::Orientation::Vertical, MEANING).1 + 20).min(TALLEST);
-        let bottom = self.display.monitors().into_iter().flatten().filter_map(|m| m.downcast::<gdk::Monitor>().ok()).map(|m| m.geometry().y() + m.geometry().height()).max();
+        let bounds = self.strip.monitor().map(|m| m.geometry()).unwrap_or_else(|| gdk::Rectangle::new(0, 0, 1920, 1080));
         let below = ui.strip.1 + self.strip.height() + 2;
-        let top = if bottom.is_none_or(|bottom| below + tall <= bottom) { below } else { ui.strip.1 - tall - 2 };
+        let top = if below + tall <= bounds.y() + bounds.height() { below } else { ui.strip.1 - tall - 2 };
         // the least may never be above the most, so the most is let go of first
         self.scrolled.set_max_content_height(-1);
         self.scrolled.set_min_content_height(tall - 20);
         self.scrolled.set_max_content_height(tall - 20);
-        self.popup.set_margin(Edge::Left, (ui.strip.0 + x - 24).max(0));
-        self.popup.set_margin(Edge::Top, top.max(0));
+        self.popup.set_margin(Edge::Left, (ui.strip.0 + x - 24 - bounds.x()).clamp(0, (bounds.width() - MEANING - 30).max(0)));
+        self.popup.set_margin(Edge::Top, (top - bounds.y()).max(0));
         self.popup.set_default_size(-1, -1);
         self.popup.set_visible(true);
     }
@@ -1297,25 +1386,8 @@ impl Overlay {
     fn more_menu(self: &Rc<Self>) -> gtk4::Popover {
         let menu = gtk4::Popover::new();
         menu.add_css_class("vntext-menu");
-        menu.set_position(gtk4::PositionType::Left);
+        menu.set_position(gtk4::PositionType::Bottom);
         let list = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
-        let lock = gtk4::CheckButton::with_label("Khóa vị trí dải");
-        lock.set_active(self.ui.borrow().locked);
-        let overlay = self.clone();
-        lock.connect_toggled(move |lock| {
-            overlay.ui.borrow_mut().locked = lock.is_active();
-            overlay.render();
-            overlay.place();
-        });
-        let (overlay, kept) = (self.clone(), lock.clone());
-        menu.connect_show(move |_| {
-            let locked = overlay.ui.borrow().locked;
-            kept.set_active(locked);
-        });
-        let about = gtk4::Label::new(Some("Quét chữ vẫn dùng được khi khóa vị trí."));
-        about.add_css_class("caption");
-        list.append(&about);
-        list.append(&lock);
         let action = |name: &str, act: Box<dyn Fn(&Rc<Overlay>)>| {
             let button = gtk4::Button::with_label(name);
             let (overlay, menu) = (self.clone(), menu.clone());
@@ -1325,6 +1397,7 @@ impl Overlay {
             });
             list.append(&button);
         };
+        action("Chỉnh bố cục…", Box::new(|o| o.editing(true)));
         action("Chép câu đang hiện", Box::new(|o| {
             let text = {
                 let ui = o.ui.borrow();
@@ -1396,7 +1469,7 @@ impl Overlay {
         opacity.set_width_request(180);
         let overlay = self.clone();
         opacity.connect_value_changed(move |opacity| overlay.restyle(|l| l.opacity = opacity.value().clamp(*OPACITIES.start(), *OPACITIES.end())));
-        row("Độ mờ nền", opacity.upcast_ref());
+        row("Độ đậm nền", opacity.upcast_ref());
 
         let colours = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
         let swatches: Rc<RefCell<Vec<(&str, gtk4::Button)>>> = Rc::default();
@@ -1423,15 +1496,13 @@ impl Overlay {
         modes.connect_selected_notify(move |modes| overlay.restyle(|l| l.mode = Mode::ALL.get(modes.selected() as usize).map_or(Mode::Translation, |m| m.0)));
         row("Hiện", modes.upcast_ref());
 
-        let locked = gtk4::Switch::new();
-        locked.set_active(self.ui.borrow().locked);
+        let layout = gtk4::Button::with_label("Chỉnh bố cục trên dải…");
         let overlay = self.clone();
-        locked.connect_active_notify(move |locked| {
-            overlay.ui.borrow_mut().locked = locked.is_active();
-            overlay.render();
-            overlay.place();
+        layout.connect_clicked(move |button| {
+            if let Some(window) = button.root().and_downcast::<gtk4::Window>() { window.destroy(); }
+            overlay.editing(true);
         });
-        row("Khóa vị trí dải", locked.upcast_ref());
+        page.append(&layout);
 
         let copy = gtk4::Switch::new();
         copy.set_active(look.copy);
@@ -1441,7 +1512,7 @@ impl Overlay {
 
         // back to how the strip is for a game never set up: where it is, how wide, and how it looks
         let reset = gtk4::Button::with_label("Đặt lại mặc định");
-        reset.set_tooltip_text(Some("Đặt lại vị trí, bề rộng, cỡ chữ, độ mờ, màu, chế độ; tắt tự chép phần chọn"));
+        reset.set_tooltip_text(Some("Đặt lại vị trí, kích thước, cỡ chữ, độ đậm nền, màu, chế độ; tắt tự chép phần chọn"));
         reset.set_halign(gtk4::Align::Start);
         let (overlay, font, opacity, modes, all, copy) = (self.clone(), font.clone(), opacity.clone(), modes.clone(), swatches.clone(), copy.clone());
         reset.connect_clicked(move |_| {
@@ -1627,31 +1698,68 @@ impl Overlay {
         window.set_visible(true);
     }
 
-    /// Lets the reader drag `grip` to change where the strip is, by `moved`,
-    /// which is given how far the pointer went since it was last told.
-    fn dragging(self: &Rc<Self>, grip: &gtk4::Label, moved: fn(&mut (i32, i32, i32), i32, i32)) {
-        let drag = gtk4::GestureDrag::new();
-        let overlay = self.clone();
-        drag.connect_drag_begin(move |_, _, _| {
-            let mut ui = overlay.ui.borrow_mut();
-            // from now on the strip is where the reader puts it
-            if let (None, Some((x, y, _, _))) = (ui.look.place, ui.placed) {
+    /// Layout editing is temporary; only the resulting look is saved.
+    fn editing(self: &Rc<Self>, enabled: bool) {
+        let mut ui = self.ui.borrow_mut();
+        ui.locked = !enabled;
+        if enabled {
+            ui.look.hidden = false;
+            if let Some((x, y, _, _)) = ui.placed {
                 ui.look.place = Some((ui.strip.0 - x, ui.strip.1 - y, ui.strip.2));
             }
-        });
-        let overlay = self.clone();
-        drag.connect_drag_update(move |_, dx, dy| {
-            // The grip goes along with the strip, so the pointer is back
-            // where it took hold after each step, and how far it is from
-            // there is what it has moved since.
-            if let Some(place) = overlay.ui.borrow_mut().look.place.as_mut() {
-                moved(place, dx.round() as i32, dy.round() as i32);
-                place.2 = place.2.max(NARROWEST);
+        }
+        drop(ui);
+        self.render();
+        self.place();
+        if !enabled { self.save(); }
+    }
+
+    /// Read pointer movement in screen coordinates: the dragged widget moves too.
+    fn dragging(self: &Rc<Self>, grip: &gtk4::Widget, edges: (i32, i32)) {
+        let drag = gtk4::GestureDrag::new();
+        drag.set_button(gdk::BUTTON_PRIMARY);
+        let origin = Rc::new(Cell::new(None));
+        let (overlay, widget, begun) = (self.clone(), grip.clone(), origin.clone());
+        drag.connect_drag_begin(move |gesture, x, y| {
+            let ui = overlay.ui.borrow();
+            if ui.locked || ui.look.hidden {
+                gesture.set_state(gtk4::EventSequenceState::Denied);
+                return;
             }
+            let Some(p) = widget.compute_point(&overlay.strip, &gtk4::graphene::Point::new(x as f32, y as f32)) else { return };
+            begun.set(Some(((ui.strip.0 as f64 + p.x() as f64, ui.strip.1 as f64 + p.y() as f64),
+                            (ui.strip.0, ui.strip.1, overlay.strip.width(), overlay.strip.height()), (x, y))));
+        });
+        let (overlay, widget, begun) = (self.clone(), grip.clone(), origin.clone());
+        drag.connect_drag_update(move |gesture, dx, dy| {
+            let Some((pointer, rect, local)) = begun.get() else { return };
+            let mut ui = overlay.ui.borrow_mut();
+            if ui.locked { return; }
+            let Some((gx, gy, _, _)) = ui.placed else { return };
+            let (px, py) = gesture.point(None).unwrap_or((local.0 + dx, local.1 + dy));
+            let Some(p) = widget.compute_point(&overlay.strip, &gtk4::graphene::Point::new(px as f32, py as f32)) else { return };
+            let delta = ((ui.strip.0 as f64 + p.x() as f64 - pointer.0).round() as i32,
+                         (ui.strip.1 as f64 + p.y() as f64 - pointer.1).round() as i32);
+            if edges == (0, 0) {
+                ui.look.place = Some((rect.0 + delta.0 - gx, rect.1 + delta.1 - gy, rect.2));
+            } else {
+                let bounds = overlay.strip.monitor().unwrap().geometry();
+                // The requested size is the current rectangle, not a minimum for resizing.
+                overlay.content.set_size_request(-1, -1);
+                let minimum = (overlay.header.measure(gtk4::Orientation::Horizontal, -1).0.max(overlay.editor.measure(gtk4::Orientation::Horizontal, -1).0) + 30,
+                               overlay.content.measure(gtk4::Orientation::Vertical, rect.2).0 + if ui.look.height.is_none() { 48 } else { 0 });
+                let next = resized(rect, delta, edges, (minimum.0.max(NARROWEST), minimum.1.max(SHORTEST)),
+                                   (bounds.x(), bounds.y(), bounds.width(), bounds.height()));
+                ui.look.place = Some((next.0 - gx, next.1 - gy, next.2));
+                if edges.1 != 0 { ui.look.height = Some(next.3); }
+            }
+            drop(ui);
+            overlay.render();
             overlay.place();
         });
-        let overlay = self.clone();
-        drag.connect_drag_end(move |_, _, _| overlay.save());
+        let (overlay, begun) = (self.clone(), origin.clone());
+        drag.connect_drag_end(move |_, _, _| { if begun.take().is_some() { overlay.save(); } });
+        drag.connect_cancel(move |_, _| origin.set(None));
         grip.add_controller(drag);
     }
 
@@ -2106,12 +2214,29 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     gtk4::style_context_add_provider_for_display(&display, &style, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
     gtk4::style_context_add_provider_for_display(&display, &look_style, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
-    // the strip: a grip to move it by, the text, a grip to make it wider
+    // The header, message and footer move as one layer-shell surface.
     let strip = floating("vntext");
-    let content = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
     content.add_css_class("strip");
-    let text = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    header.add_css_class("panel-header");
+    let motion = gtk4::EventControllerMotion::new();
+    let entered = header.clone();
+    motion.connect_enter(move |_, _, _| entered.add_css_class("active"));
+    let left = header.clone();
+    motion.connect_leave(move |_| left.remove_css_class("active"));
+    content.add_controller(motion);
+    let body = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
+    let restore = gtk4::Button::with_label("vntext · Hiện");
+    restore.add_css_class("restore");
+    restore.set_tooltip_text(Some("Hiện lại phụ đề và thanh công cụ tại đây"));
+    restore.set_focusable(false);
+    let text = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
     text.set_hexpand(true);
+    text.set_vexpand(true);
+    let empty = label("caption");
+    empty.set_text("Đang chờ câu thoại trong game…");
+    text.append(&empty);
     let (speaker, japanese, translation) = (label("speaker"), label("japanese"), label("translation"));
     let passage = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
     passage.append(&speaker);
@@ -2145,8 +2270,15 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     dismiss.add_css_class("dismiss");
     hints.append(&dismiss);
     text.append(&hints);
-    let history = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    let history = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     history.add_css_class("history");
+    let history_summary = gtk4::Button::with_label("Lịch sử");
+    history_summary.set_halign(gtk4::Align::Start);
+    history_summary.set_focusable(false);
+    history_summary.set_tooltip_text(Some("Mở câu trước/sau; có thể lăn chuột ở hàng này để xem lại"));
+    let history_controls = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    history.append(&history_summary);
+    history.append(&history_controls);
     let position = label("caption");
     position.set_hexpand(true);
     position.set_ellipsize(gtk4::pango::EllipsizeMode::End);
@@ -2155,15 +2287,15 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     let latest = gtk4::Button::with_label("Về câu mới");
     latest.set_tooltip_text(Some("Về câu mới nhất và tiếp tục theo dõi game"));
     latest.set_focusable(false);
-    history.append(&previous);
-    history.append(&next);
-    history.append(&position);
-    history.append(&latest);
+    history_controls.append(&previous);
+    history_controls.append(&next);
+    history_controls.append(&position);
+    history_controls.append(&latest);
     history.set_tooltip_text(Some("Lăn chuột ở đây để xem lịch sử; chữ dài có vùng cuộn riêng"));
     text.append(&history);
     // the first time: three lines of help in place of the message
     let intro = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
-    for line in ["Rê chuột lên chữ Nhật để tra nghĩa; quét chữ rồi chuột phải để chép.", "Bấm bánh răng để chỉnh hiển thị, nguồn dịch và từ điển.", "Muốn dời dải: mở menu ⋯ và bỏ Khóa vị trí dải."] {
+    for line in ["Rê chuột lên chữ Nhật để tra nghĩa; quét chữ rồi chuột phải để chép.", "Bấm bánh răng để chỉnh hiển thị, nguồn dịch và từ điển.", "Muốn dời hoặc đổi kích thước: mở menu ⋯ → Chỉnh bố cục."] {
         intro.append(&label("intro"));
         intro.last_child().and_downcast::<gtk4::Label>().unwrap().set_text(line);
     }
@@ -2174,19 +2306,21 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     intro.append(&understood);
     intro.set_visible(false);
     text.append(&intro);
-    let grips = [label("grip"), label("grip")];
-    grips[0].set_text("⠿");
-    grips[0].set_tooltip_text(Some("Kéo để dời dải"));
-    grips[1].set_text("↔");
-    grips[1].set_tooltip_text(Some("Kéo để đổi bề rộng"));
     // not a label that wraps: there is never room for it, and it would be broken letter by letter
     let source = gtk4::Label::new(None);
     source.add_css_class("source");
     source.set_xalign(0.0);
     source.set_hexpand(true);
     source.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-    content.append(&grips[0]);
-    content.append(&text);
+    let move_area = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    move_area.set_hexpand(true);
+    let title = label("panel-title");
+    title.set_text("vntext");
+    title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+    title.set_hexpand(true);
+    move_area.append(&title);
+    header.append(&move_area);
+    body.append(&text);
     let service = gtk4::Button::new();
     service.add_css_class("service");
     service.set_focusable(false);
@@ -2200,8 +2334,55 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     speech_status.set_max_width_chars(28);
     metadata.append(&speech_status);
     text.prepend(&metadata);
-    content.append(&grips[1]);
-    strip.set_child(Some(&content));
+    let editor = gtk4::Box::new(gtk4::Orientation::Vertical, 5);
+    editor.add_css_class("layout-editor");
+    let background = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    background.append(&gtk4::Label::new(Some("Độ đậm nền")));
+    let opacity = gtk4::Scale::with_range(gtk4::Orientation::Horizontal, *OPACITIES.start(), *OPACITIES.end(), 0.01);
+    opacity.set_hexpand(true);
+    opacity.set_width_request(80);
+    opacity.set_tooltip_text(Some("Chỉ thay nền mờ; chữ và nút vẫn rõ"));
+    let opacity_now = gtk4::Label::new(None);
+    opacity_now.set_width_chars(4);
+    background.append(&opacity);
+    background.append(&opacity_now);
+    let layout = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let automatic = gtk4::CheckButton::with_label("Chiều cao tự động");
+    automatic.set_hexpand(true);
+    automatic.set_tooltip_text(Some("Tự co giãn theo câu thoại; kéo cạnh trên/dưới để dùng chiều cao cố định"));
+    let reset = gtk4::Button::with_label("Đặt lại");
+    reset.set_focusable(false);
+    reset.set_tooltip_text(Some("Đặt lại bố cục: vị trí, kích thước và độ đậm nền"));
+    let done = gtk4::Button::with_label("Xong");
+    done.set_focusable(false);
+    done.add_css_class("done");
+    layout.append(&automatic);
+    layout.append(&reset);
+    layout.append(&done);
+    editor.append(&background);
+    editor.append(&layout);
+    content.append(&header);
+    content.append(&editor);
+    content.append(&body);
+    content.append(&restore);
+    let frame = gtk4::Overlay::new();
+    frame.set_child(Some(&content));
+    let mut handles = Vec::new();
+    for (horizontal, vertical, cursor) in [(-1, -1, "nw-resize"), (0, -1, "n-resize"), (1, -1, "ne-resize"), (-1, 0, "w-resize"), (1, 0, "e-resize"), (-1, 1, "sw-resize"), (0, 1, "s-resize"), (1, 1, "se-resize")] {
+        let handle = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        handle.add_css_class("resize-handle");
+        handle.set_cursor_from_name(Some(cursor));
+        handle.set_tooltip_text(Some("Kéo để đổi kích thước dải"));
+        let align = |direction| match direction { -1 => gtk4::Align::Start, 1 => gtk4::Align::End, _ => gtk4::Align::Fill };
+        handle.set_halign(align(horizontal));
+        handle.set_valign(align(vertical));
+        handle.set_size_request(if horizontal == 0 { -1 } else { 8 }, if vertical == 0 { -1 } else { 8 });
+        if horizontal == 0 { handle.set_margin_start(16); handle.set_margin_end(16); }
+        if vertical == 0 { handle.set_margin_top(16); handle.set_margin_bottom(16); }
+        frame.add_overlay(&handle);
+        handles.push(((horizontal, vertical), handle));
+    }
+    strip.set_child(Some(&frame));
 
     // the meaning of a word: Yomitan's entries, one under the other, scrolled when long
     let popup = floating("vntext");
@@ -2229,22 +2410,18 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
         }
     });
 
-    let bar = floating("vntext");
-    let buttons = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-    buttons.add_css_class("bar");
-    bar.set_child(Some(&buttons));
-    let hide = pictured("view-reveal-symbolic", "Ẩn hoặc hiện dải phụ đề");
+    let hide = pictured("window-minimize-symbolic", "Thu gọn phụ đề tại chỗ");
     // the one button that says what it is on: an icon and the mode
     let mode = pictured("preferences-desktop-locale-symbolic", "Đổi giữa bản dịch, câu tiếng Nhật, hoặc cả hai");
     let mode_now = gtk4::Label::new(None);
-    let both = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    let both = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
     both.append(&gtk4::Image::from_icon_name("preferences-desktop-locale-symbolic"));
     both.append(&mode_now);
     mode.set_child(Some(&both));
 
     let game = mem::name(pid);
     let look = saved_looks().get(&game).map(Look::from_json).unwrap_or_default();
-    let ui = Ui { shown: Shown::default(), look, locked: true, game: None, placed: None, strip: (0, 0, 0), picking: false, reading, intro: !intro_read(&saved_looks()), selection: None, copied: None, hover: None, asked: None, lookups: 0, over_meaning: false, away: 0 };
+    let ui = Ui { shown: Shown::default(), look, locked: true, game: None, placed: None, strip: (0, 0, 0), picking: false, reading, intro: !intro_read(&saved_looks()), selection: None, copied: None, hover: None, asked: None, lookups: 0, over_meaning: false, away: 0, history_open: false, expanded_height: 160 };
     let overlay = Rc::new(Overlay {
         ui: RefCell::new(ui),
         events,
@@ -2275,13 +2452,27 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
         next,
         latest,
         offer: Cell::new(None),
-        grips,
+        move_area,
+        title,
+        handles,
+        editor,
+        done,
+        opacity,
+        opacity_now,
+        automatic,
+        reset,
+        layout_sync: Cell::new(false),
         popup,
         meaning,
         scrolled,
         asks,
         answers,
-        bar,
+        header,
+        body,
+        restore,
+        history_summary,
+        history_controls,
+        empty,
         hide,
         mode,
         mode_now,
@@ -2293,6 +2484,7 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
 
     overlay.acting(&overlay.hide, |o| {
         let mut ui = o.ui.borrow_mut();
+        ui.locked = true;
         ui.look.hidden = !ui.look.hidden;
         drop(ui);
         o.save();
@@ -2303,9 +2495,8 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
         drop(ui);
         o.save();
     });
-    // only what is pressed often is on the bar: the rest is in the settings
-    buttons.append(&overlay.hide);
-    buttons.append(&overlay.mode);
+    // The compact header stays with the text instead of floating at the game's corner.
+    overlay.header.append(&overlay.mode);
     let listening = overlay.clone();
     overlay.listen.connect_clicked(move |_| {
         if listening.speech.status().busy() {
@@ -2319,10 +2510,16 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     });
     let more = gtk4::MenuButton::new();
     more.set_icon_name("view-more-symbolic");
-    more.set_tooltip_text(Some("Thao tác khác: khóa vị trí, chép, OCR, dừng theo dõi"));
+    more.set_tooltip_text(Some("Thao tác khác: chỉnh bố cục, chép, OCR, dừng theo dõi"));
     more.set_popover(Some(&overlay.more_menu()));
-    buttons.append(&more);
-    buttons.append(&overlay.button("emblem-system-symbolic", "Thiết lập: hiển thị, dịch, từ điển, OCR", |o| o.set_up(Tab::Display)));
+    overlay.header.append(&more);
+    overlay.header.append(&overlay.button("emblem-system-symbolic", "Thiết lập: hiển thị, dịch, từ điển, OCR", |o| o.set_up(Tab::Display)));
+    overlay.header.append(&overlay.hide);
+    overlay.acting(&overlay.restore, |o| {
+        o.ui.borrow_mut().look.hidden = false;
+        o.save();
+    });
+    overlay.acting(&overlay.history_summary, |o| o.ui.borrow_mut().history_open = true);
     overlay.acting(&overlay.dismiss, |o| o.ui.borrow_mut().shown.dismiss());
     overlay.acting(&overlay.previous, |o| {
         o.ui.borrow_mut().shown.step(-1);
@@ -2333,7 +2530,10 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
         o.speech.suspend(o.ui.borrow().shown.old().is_some());
     });
     overlay.acting(&overlay.latest, |o| {
-        o.ui.borrow_mut().shown.latest();
+        let mut ui = o.ui.borrow_mut();
+        ui.shown.latest();
+        ui.history_open = false;
+        drop(ui);
         o.speech.suspend(false);
     });
     let chooser = overlay.clone();
@@ -2352,8 +2552,28 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
         }
     });
 
-    overlay.dragging(&overlay.grips[0], |place, dx, dy| (place.0, place.1) = (place.0 + dx, place.1 + dy));
-    overlay.dragging(&overlay.grips[1], |place, dx, _| place.2 += dx);
+    overlay.dragging(overlay.move_area.upcast_ref(), (0, 0));
+    for (edges, handle) in &overlay.handles { overlay.dragging(handle.upcast_ref(), *edges); }
+    let editing = overlay.clone();
+    overlay.done.connect_clicked(move |_| editing.editing(false));
+    let fading = overlay.clone();
+    overlay.opacity.connect_value_changed(move |scale| {
+        if !fading.layout_sync.get() { fading.restyle(|look| look.opacity = scale.value()); }
+    });
+    let sizing = overlay.clone();
+    overlay.automatic.connect_toggled(move |automatic| {
+        if sizing.layout_sync.get() { return; }
+        let height = sizing.strip.height().max(SHORTEST);
+        sizing.restyle(|look| look.height = if automatic.is_active() { None } else { Some(height) });
+    });
+    overlay.acting(&overlay.reset, |o| {
+        let mut ui = o.ui.borrow_mut();
+        ui.look.place = None;
+        ui.look.height = None;
+        ui.look.opacity = OPACITY;
+        drop(ui);
+        o.save();
+    });
     // the pointer on the meaning keeps it open, to be read and scrolled
     let on_meaning = gtk4::EventControllerMotion::new();
     let (entered, left) = (overlay.clone(), overlay.clone());
@@ -2449,6 +2669,25 @@ mod tests {
             }
             found
         }
+        fn drag(overlay: &Overlay, widget: &gtk4::Widget, dx: f64, dy: f64) {
+            let gesture = widget.observe_controllers().into_iter().flatten()
+                .find_map(|c| c.downcast::<gtk4::GestureDrag>().ok()).unwrap();
+            let origin = || {
+                let p = widget.compute_point(&overlay.strip, &gtk4::graphene::Point::new(0.0, 0.0)).unwrap();
+                let ui = overlay.ui.borrow();
+                (ui.strip.0 as f64 + p.x() as f64, ui.strip.1 as f64 + p.y() as f64)
+            };
+            let start = origin();
+            gesture.emit_by_name::<()>("drag-begin", &[&4.0f64, &4.0f64]);
+            gesture.emit_by_name::<()>("drag-update", &[&(dx / 2.0), &(dy / 2.0)]);
+            pump();
+            let moved = origin();
+            let offset = (dx - (moved.0 - start.0), dy - (moved.1 - start.1));
+            gesture.emit_by_name::<()>("drag-update", &[&offset.0, &offset.1]);
+            gesture.emit_by_name::<()>("drag-end", &[&offset.0, &offset.1]);
+            pump();
+            overlay.place();
+        }
         let opts = crate::Opts {
             args: Vec::new(), min: 4, all: false, clip: false, raw: false,
             translate: false, to: "vi".to_string(), model: None, web: false,
@@ -2460,6 +2699,10 @@ mod tests {
                             Arc::new(ocr::Control::default()), ocr::Settings::of(&opts), false, speech).unwrap();
         overlay.ui.borrow_mut().intro = false;
         overlay.ui.borrow_mut().look.mode = Mode::Both;
+        overlay.render();
+        overlay.tick();
+        capture(&overlay.strip, "waiting");
+        assert!(overlay.empty.is_mapped() && overlay.header.is_mapped());
         hub.publish(r#"{"type":"message","seq":1,"name":"例","lines":["こんにちは。今日はいい天気ですね。"]}"#.to_string());
         hub.publish(r#"{"type":"translation","seq":1,"tr":"Xin chào. Hôm nay trời đẹp nhỉ."}"#.to_string());
         hub.publish(r#"{"type":"message","seq":2,"lines":["一緒に散歩しましょう。"]}"#.to_string());
@@ -2476,7 +2719,11 @@ mod tests {
         assert!(overlay.japanese.is_selectable());
         assert!(!overlay.ui.borrow().look.copy);
         capture(&overlay.strip, "overlay");
-        capture(&overlay.bar, "toolbar");
+        assert!(overlay.history_summary.is_mapped());
+        assert!(!overlay.history_controls.is_mapped());
+        overlay.history_summary.emit_clicked();
+        pump();
+        assert!(overlay.history_controls.is_mapped());
         overlay.previous.emit_clicked();
         hub.publish(r#"{"type":"message","seq":3,"lines":["また明日。"]}"#.to_string());
         overlay.tick();
@@ -2484,9 +2731,58 @@ mod tests {
         capture(&overlay.strip, "history");
         overlay.latest.emit_clicked();
         assert_eq!(overlay.ui.borrow().shown.messages[overlay.ui.borrow().shown.at].seq, 3);
+        pump();
+        overlay.place();
+        let expanded = overlay.ui.borrow().strip;
         overlay.hide.emit_clicked();
-        assert!(!overlay.strip.is_visible());
-        overlay.hide.emit_clicked();
+        capture(&overlay.strip, "collapsed");
+        assert!(overlay.strip.is_mapped() && overlay.restore.is_mapped());
+        assert!(!overlay.header.is_mapped() && !overlay.body.is_mapped());
+        assert_eq!(overlay.ui.borrow().strip, expanded);
+        assert!(overlay.strip.width() < expanded.2);
+        overlay.restore.emit_clicked();
+        pump();
+        overlay.place();
+        assert!(overlay.header.is_mapped() && overlay.body.is_mapped());
+        assert!(!overlay.restore.is_mapped());
+        assert_eq!(overlay.ui.borrow().strip, expanded);
+        hub.publish(r#"{"type":"translation","seq":3,"tr":"Hẹn ngày mai nhé."}"#.to_string());
+        overlay.ui.borrow_mut().look.mode = Mode::Translation;
+        overlay.tick();
+        pump();
+        overlay.place();
+        assert!(!overlay.japanese.is_visible());
+        assert!(overlay.listen.is_mapped() && overlay.header.is_mapped());
+        let input = overlay.input(true);
+        for button in [overlay.header.upcast_ref::<gtk4::Widget>(), overlay.listen.upcast_ref(), overlay.history_summary.upcast_ref()] {
+            let b = button.compute_bounds(&overlay.strip).unwrap();
+            assert!(input.contains_point((b.x() + b.width() / 2.0) as i32, (b.y() + b.height() / 2.0) as i32));
+        }
+        let b = overlay.translation.compute_bounds(&overlay.strip).unwrap();
+        assert!(!input.contains_point((b.x() + b.width() / 2.0) as i32, (b.y() + b.height() / 2.0) as i32));
+        capture(&overlay.strip, "translation");
+        overlay.ui.borrow_mut().look.mode = Mode::Both;
+        overlay.render();
+        overlay.place();
+        let look = overlay.ui.borrow().look.clone();
+        {
+            let mut ui = overlay.ui.borrow_mut();
+            ui.look.place = Some((10000, 10000, 200));
+            ui.look.font = 72;
+        }
+        overlay.render();
+        overlay.place();
+        pump();
+        overlay.place();
+        capture(&overlay.strip, "narrow");
+        let bounds = overlay.strip.monitor().unwrap().geometry();
+        assert!(overlay.strip.width() <= bounds.width() && overlay.strip.height() <= bounds.height());
+        assert!(overlay.strip.margin(Edge::Left) + overlay.strip.width() <= bounds.width());
+        assert!(overlay.strip.margin(Edge::Top) + overlay.strip.height() <= bounds.height());
+        assert!(overlay.hide.is_mapped() && overlay.listen.is_mapped());
+        overlay.ui.borrow_mut().look = look;
+        overlay.render();
+        overlay.place();
         for (tab, id, _) in Tab::ALL {
             overlay.set_up(tab);
             pump();
@@ -2504,14 +2800,10 @@ mod tests {
             pump();
             assert!(!overlay.asking.get());
         }
-        let buttons = overlay.bar.child().unwrap();
-        let mut count = 0;
-        let mut child = buttons.first_child();
-        while let Some(button) = child {
-            count += 1;
-            child = button.next_sibling();
-        }
-        assert_eq!(count, 4);
+        let buttons = overlay.header.clone().upcast::<gtk4::Widget>();
+        assert!(descendants(&buttons).contains(&overlay.hide.clone().upcast::<gtk4::Widget>()));
+        assert!(descendants(&buttons).contains(&overlay.mode.clone().upcast::<gtk4::Widget>()));
+        assert!(descendants(overlay.strip.upcast_ref()).contains(&buttons));
         assert!(descendants(overlay.strip.upcast_ref()).contains(&overlay.listen.clone().upcast::<gtk4::Widget>()));
         assert!(!descendants(&buttons).contains(&overlay.listen.clone().upcast::<gtk4::Widget>()));
         let menu_button = descendants(&buttons).into_iter().find_map(|widget| widget.downcast::<gtk4::MenuButton>().ok()).unwrap();
@@ -2519,20 +2811,105 @@ mod tests {
         menu_button.popup();
         pump();
         assert!(menu.is_mapped());
-        let lock = descendants(menu.upcast_ref()).into_iter().find_map(|widget| widget.downcast::<gtk4::CheckButton>().ok()).unwrap();
-        lock.set_active(false);
+        let edit = descendants(menu.upcast_ref()).into_iter().filter_map(|w| w.downcast::<gtk4::Button>().ok())
+            .find(|b| b.label().as_deref() == Some("Chỉnh bố cục…")).unwrap();
+        edit.emit_clicked();
+        pump();
         assert!(!overlay.ui.borrow().locked);
-        lock.set_active(true);
+        assert!(overlay.editor.is_mapped() && overlay.handles.iter().all(|(_, h)| h.is_mapped()));
+        overlay.japanese.select_region(0, 2);
+        let selection = overlay.japanese.selection_bounds();
+        overlay.opacity.set_value(0.33);
+        assert_eq!(overlay.ui.borrow().look.opacity, 0.33);
+        assert_eq!(overlay.opacity_now.text(), "33%");
+        assert_eq!(overlay.japanese.selection_bounds(), selection);
+        overlay.restyle(|look| { look.place = Some((0, 0, 600)); look.height = Some(320); });
+        pump();
+        overlay.place();
+        let corner = &overlay.handles.iter().find(|(edges, _)| *edges == (1, 1)).unwrap().1;
+        drag(&overlay, corner.upcast_ref(), 80.0, 60.0);
+        assert_eq!(overlay.ui.borrow().look.place, Some((0, 0, 680)));
+        assert_eq!(overlay.ui.borrow().look.height, Some(380));
+        assert_eq!(overlay.strip.height(), 380);
+        let corner = &overlay.handles.iter().find(|(edges, _)| *edges == (-1, -1)).unwrap().1;
+        drag(&overlay, corner.upcast_ref(), -10.0, -10.0);
+        assert_eq!(overlay.ui.borrow().look.place, Some((-10, -10, 690)));
+        assert_eq!(overlay.ui.borrow().look.height, Some(390));
+        drag(&overlay, overlay.move_area.upcast_ref(), 20.0, 25.0);
+        assert_eq!(overlay.ui.borrow().look.place, Some((10, 15, 690)));
+        assert_eq!(overlay.strip.height(), 390);
+        capture(&overlay.strip, "layout-editor");
+        let long = "今日はいい天気ですね。一緒に散歩しましょう。".repeat(30);
+        hub.publish(json!({"type": "message", "seq": 4, "lines": [long]}).to_string());
+        overlay.tick();
+        pump();
+        assert_eq!(overlay.strip.height(), 390);
+        let scroll = overlay.text_scroll.vadjustment();
+        assert!(scroll.upper() > scroll.page_size());
+        assert!(overlay.header.is_mapped() && overlay.done.is_mapped());
+        overlay.done.emit_clicked();
+        pump();
+        assert_eq!(overlay.strip.height(), 390);
+        assert!(!overlay.editor.is_mapped());
+        assert_eq!(Look::from_json(&saved_looks()[&overlay.game]).height, Some(390));
+        overlay.hide.emit_clicked();
+        pump();
+        assert_eq!(overlay.ui.borrow().look.height, Some(390));
+        assert!(overlay.restore.is_mapped());
+        overlay.restore.emit_clicked();
+        pump();
+        assert_eq!(overlay.strip.height(), 390);
+        overlay.editing(true);
+        pump();
+        overlay.automatic.set_active(true);
+        pump();
+        let side = &overlay.handles.iter().find(|(edges, _)| *edges == (1, 0)).unwrap().1;
+        drag(&overlay, side.upcast_ref(), -120.0, 0.0);
+        assert!(overlay.ui.borrow().look.height.is_none());
+        assert_eq!(overlay.ui.borrow().look.place.unwrap().2, 570);
+        overlay.reset.emit_clicked();
+        assert!(overlay.ui.borrow().look.place.is_none() && overlay.ui.borrow().look.height.is_none());
+        assert_eq!(overlay.ui.borrow().look.opacity, OPACITY);
+        overlay.done.emit_clicked();
+        pump();
         assert!(overlay.ui.borrow().locked && overlay.japanese.is_selectable());
-        menu_button.popdown();
+        assert!(!overlay.editor.is_mapped() && overlay.handles.iter().all(|(_, h)| !h.is_mapped()));
+        let saved = saved_looks();
+        assert_eq!(Look::from_json(&saved[&overlay.game]), overlay.ui.borrow().look);
+        let look = overlay.ui.borrow().look.clone();
+        drag(&overlay, overlay.move_area.upcast_ref(), 30.0, 30.0);
+        assert_eq!(overlay.ui.borrow().look, look);
         overlay.text_menu(4.0, 4.0);
         pump();
         assert!(descendants(overlay.japanese.upcast_ref()).into_iter()
             .any(|widget| widget.downcast::<gtk4::Popover>().is_ok_and(|menu| menu.is_mapped())));
-        overlay.bar.destroy();
         overlay.strip.destroy();
         overlay.popup.destroy();
         overlay.speech.shutdown();
+    }
+
+    #[test]
+    fn panel_stays_within_its_monitor() {
+        let screen = (0, 0, 1024, 768);
+        assert_eq!(panel((40, 24, 680, 370), None, screen, 320, 150), (40, 400, 680));
+        assert_eq!(panel((0, 0, 1024, 768), None, screen, 320, 150), (0, 612, 1024));
+        assert_eq!(panel((900, 650, 680, 370), Some((200, 100, 680)), screen, 320, 150), (344, 618, 680));
+        assert_eq!(panel((40, 24, 680, 370), Some((0, 0, 200)), screen, 320, 150), (40, 24, 320));
+        assert_eq!(panel((-1920, 0, 1920, 1080), None, (-1920, 0, 1920, 1080), 320, 150), (-1920, 924, 1920));
+        assert_eq!(panel((0, 0, 800, 600), None, (0, 0, 280, 240), 320, 300), (0, 0, 280));
+    }
+
+    #[test]
+    fn resize_keeps_opposite_edges_and_respects_bounds() {
+        let rect = (100, 100, 500, 300);
+        let screen = (0, 0, 1024, 768);
+        assert_eq!(resized(rect, (40, 50), (1, 1), (300, 140), screen), (100, 100, 540, 350));
+        assert_eq!(resized(rect, (40, 50), (-1, -1), (300, 140), screen), (140, 150, 460, 250));
+        assert_eq!(resized(rect, (1000, 1000), (-1, -1), (300, 140), screen), (300, 260, 300, 140));
+        assert_eq!(resized(rect, (-1000, -1000), (-1, -1), (300, 140), screen), (0, 0, 600, 400));
+        assert_eq!(resized(rect, (1000, 1000), (1, 1), (300, 140), screen), (100, 100, 924, 668));
+        assert_eq!(resized(rect, (-1000, 50), (1, 0), (300, 140), screen), (100, 100, 300, 300));
+        assert_eq!(resized((-1800, 100, 500, 300), (-400, 0), (-1, 0), (300, 140), (-1920, 0, 1920, 1080)), (-1920, 100, 620, 300));
     }
 
     #[test]
@@ -2632,7 +3009,7 @@ mod tests {
 
     #[test]
     fn looks_round_trip() {
-        let look = Look { font: 30, opacity: 0.4, colour: "#a6e3a1".to_string(), mode: Mode::Both, place: Some((10, -20, 640)), hidden: true, copy: true };
+        let look = Look { font: 30, opacity: 0.4, colour: "#a6e3a1".to_string(), mode: Mode::Both, place: Some((10, -20, 640)), height: Some(300), hidden: true, copy: true };
         assert_eq!(Look::from_json(&look.to_json()), look);
         assert_eq!(Look::from_json(&json!({"font": 500, "mode": "?", "place": [1, 2]})), Look::default());
     }
@@ -2643,6 +3020,8 @@ mod tests {
         let old = Look::from_json(&json!({"font": 30, "mode": "both", "place": [1, 2, 300], "hidden": true}));
         assert_eq!((old.font, old.opacity, old.colour.as_str()), (30, OPACITY, COLOUR));
         assert_eq!(old.place, Some((1, 2, 300)));
+        assert!(old.height.is_none());
+        assert!(Look::from_json(&json!({"height": 20})).height.is_none());
         let wrong = Look::from_json(&json!({"opacity": 0.0, "colour": "red; } * { display: none"}));
         assert_eq!((wrong.opacity, wrong.colour.as_str()), (OPACITY, COLOUR));
         assert_eq!(Look::from_json(&json!({"opacity": 1.0})).opacity, 1.0);
