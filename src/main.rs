@@ -17,6 +17,7 @@ mod text;
 mod tray;
 mod translate;
 mod web;
+mod tts;
 mod yomitan;
 
 use std::collections::{HashSet, VecDeque};
@@ -149,11 +150,15 @@ fn die(msg: &str) -> ! {
 
 /// Serves the page for reading in a browser, and opens it there if asked.
 fn serve(hub: &web::Hub, o: &Opts) {
-    let page = format!("http://127.0.0.1:{}", o.port);
-    match hub.serve(o.port) {
-        Ok(()) => eprintln!("page for Yomitan: {page}"),
+    let port = match hub.serve(o.port) {
+        Ok(port) => port,
         Err(e) => die(&format!("cannot serve on port {}: {e}", o.port)),
+    };
+    let page = format!("http://127.0.0.1:{port}");
+    if port != o.port {
+        eprintln!("port {} is busy; using {port}", o.port);
     }
+    eprintln!("page for Yomitan: {page}");
     if o.open {
         if let Err(e) = Command::new("xdg-open").arg(&page).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
             eprintln!("\x1b[33mcannot open {page} in a browser: {e}\x1b[0m");
@@ -168,6 +173,7 @@ static LEAVING: AtomicBool = AtomicBool::new(false);
 /// still be done.
 fn leave(code: i32) -> ! {
     LEAVING.store(true, Ordering::SeqCst);
+    tts::cleanup();
     kwin::cleanup();
     exit(code)
 }
@@ -489,6 +495,9 @@ fn follow(p: Proc, engine: Arc<dyn Engine>, o: &Opts) {
             hub.publish(
                 serde_json::json!({
                     "type": "message", "seq": seq, "source": "profile", "index": index,
+                    "next_lines": (index + 1 < engine.len()).then(|| engine.passage(index + 1).lines)
+                        .filter(|lines| lines.iter().map(|line| line.chars().count()).sum::<usize>() <= 160
+                            && !lines.iter().any(|line| line.starts_with('▶'))),
                     "name": passage.speaker, "lines": passage.lines, "translating": jobs.is_some(),
                 })
                 .to_string(),

@@ -298,6 +298,7 @@ extern "C" fn signalled(signal: libc::c_int) {
 /// the next run.
 extern "C" fn at_exit() {
     crate::LEAVING.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = std::panic::catch_unwind(crate::tts::cleanup);
     let _ = std::panic::catch_unwind(cleanup);
 }
 
@@ -313,6 +314,7 @@ fn unload_on_exit() {
     std::thread::spawn(move || {
         let mut byte = [0u8; 1];
         if read.read_exact(&mut byte).is_ok() {
+            crate::tts::cleanup();
             cleanup();
             std::process::exit(128 + byte[0] as i32);
         }

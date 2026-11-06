@@ -128,15 +128,33 @@ impl Script {
     fn find(p: &Proc) -> Option<Script> {
         let finder = memmem::Finder::new(MAGIC);
         let mut candidates = Vec::new();
-        p.scan(false, |base, data, limit, m| {
+        let mut collect = |base: u64, data: &[u8], limit: usize, m: &Mapping| {
             for off in finder.find_iter(data).take_while(|off| *off < limit) {
                 if let Some(size) = data.get(off + 4..off + 8) {
                     let size = u32::from_le_bytes(size.try_into().unwrap()) as usize;
                     candidates.push((base + off as u64, size, (m.dev.clone(), m.inode)));
                 }
             }
-        })
-        .ok()?;
+        };
+        p.scan(false, &mut collect).ok()?;
+        if let Some(script) = Script::from_candidates(p, candidates) {
+            return Some(script);
+        }
+        let mut candidates = Vec::new();
+        p.scan_shared(|_| true, |base, data, limit, m| {
+            for off in finder.find_iter(data).take_while(|off| *off < limit) {
+                if let Some(size) = data.get(off + 4..off + 8) {
+                    let size = u32::from_le_bytes(size.try_into().unwrap()) as usize;
+                    candidates.push((base + off as u64, size, (m.dev.clone(), m.inode)));
+                }
+            }
+        }).ok()?;
+        let script = Script::from_candidates(p, candidates)?;
+        eprintln!("scenario recovered from allocated shared memory: {}", script.layout.game);
+        Some(script)
+    }
+
+    fn from_candidates(p: &Proc, candidates: Vec<(u64, usize, (String, u64))>) -> Option<Script> {
         for (addr, size, home) in candidates {
             if !(0x1000..=512 << 20).contains(&size) {
                 continue;
