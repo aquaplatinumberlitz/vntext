@@ -80,10 +80,27 @@ PYTHONPATH trỏ daemon support gốc. Port vẫn 17862, dùng dữ liệu và p
 Muốn rollback, đóng client đang phát rồi:
 
 ```bash
+systemctl --user stop aivoice2-tts
+python3 - <<'PY'
+from pathlib import Path
+link = Path('/home/admin/aivoice2-re/wineprefix/dosdevices/r:')
+owned = {
+    Path('/home/admin/Projects/vntext/target/tts-runtime').resolve(),
+    Path('/home/admin/Projects/vntext-uiux/target/tts-runtime').resolve(),
+}
+original = Path('/home/admin/aivoice2-re/src/daemon/build').resolve()
+if not link.is_symlink() or link.resolve() not in owned | {original}:
+    raise SystemExit('Runtime alias không thuộc bản đã thiết lập; kiểm tra trước khi đổi.')
+if link.resolve() != original:
+    link.unlink()
+    link.symlink_to(original, target_is_directory=True)
+PY
 rm ~/.config/systemd/user/aivoice2-tts.service.d/50-vntext-latency.conf
 systemctl --user daemon-reload
 systemctl --user restart aivoice2-tts
 ```
 
+Ví dụ này chỉ dành cho máy dev có đường dẫn/prefix nêu trên. Alias R: phải
+được trả về thư mục worker gốc; loader cố ý không tự ghi đè alias khác đích.
 Chỉ bỏ drop-in này, không dùng `systemctl revert` vì có thể xóa cấu hình
 khác của người dùng. vntext sẽ dùng lại đường WAV tương thích.
