@@ -11,6 +11,10 @@ use x11rb::connection::Connection;
 use x11rb::protocol::res;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, ImageFormat, MapState, Window};
 use x11rb::rust_connection::RustConnection;
+#[cfg(target_os = "linux")]
+use x11rb::rust_connection::DefaultStream;
+#[cfg(target_os = "linux")]
+use x11rb::reexports::x11rb_protocol::{parse_display, xauth};
 
 use crate::kwin::{self, Kwin};
 
@@ -104,7 +108,15 @@ pub fn by_process(windows: Vec<Listed>, me: u32) -> Vec<Listed> {
 
 impl X11 {
     pub fn open() -> Result<X11, String> {
-        let (conn, screen) = x11rb::connect(None).map_err(|e| format!("cannot reach the X server: {e}"))?;
+        let (conn, screen) = match x11rb::connect(None) {
+            Ok(connected) => connected,
+            #[cfg(target_os = "linux")]
+            Err(original) => abstract_x11(None).map_err(|fallback| {
+                format!("cannot reach the X server: {original}; local abstract socket: {fallback}")
+            })?,
+            #[cfg(not(target_os = "linux"))]
+            Err(error) => return Err(format!("cannot reach the X server: {error}")),
+        };
         let root = conn.setup().roots[screen].root;
         Ok(X11 { conn, root })
     }
@@ -236,6 +248,34 @@ impl X11 {
         let grey: Vec<u8> = image.data.chunks_exact(4).map(|p| ((p[2] as u32 * 77 + p[1] as u32 * 150 + p[0] as u32 * 29) >> 8) as u8).collect();
         Some(Picture::from_grey(&grey, w, h))
     }
+}
+
+/// XWayland can still listen in Linux's abstract namespace after its socket
+/// file was removed. Use the same display and Xauthority, never disable auth
+/// or redirect a requested remote display to the local desktop.
+#[cfg(target_os = "linux")]
+fn abstract_x11(display: Option<&str>) -> Result<(RustConnection, usize), String> {
+    use std::os::linux::net::SocketAddrExt;
+    use std::os::unix::net::{SocketAddr, UnixStream};
+    let parsed = parse_display::parse_display(display).map_err(|e| e.to_string())?;
+    let path = abstract_path(&parsed).ok_or("not a local Unix display")?;
+    let address = SocketAddr::from_abstract_name(path.as_bytes()).map_err(|e| e.to_string())?;
+    let socket = UnixStream::connect_addr(&address).map_err(|e| e.to_string())?;
+    let (stream, (family, peer)) = DefaultStream::from_unix_stream(socket).map_err(|e| e.to_string())?;
+    let (auth_name, auth_data) = xauth::get_auth(family, &peer, parsed.display)
+        .map_err(|e| format!("cannot read Xauthority: {e}"))?.unwrap_or_default();
+    let screen = usize::from(parsed.screen);
+    let connection = RustConnection::connect_to_stream_with_auth_info(stream, screen, auth_name, auth_data)
+        .map_err(|e| e.to_string())?;
+    Ok((connection, screen))
+}
+
+#[cfg(target_os = "linux")]
+fn abstract_path(display: &parse_display::ParsedDisplay) -> Option<String> {
+    display.connect_instruction().find_map(|address| match address {
+        parse_display::ConnectAddress::Socket(path) => Some(path),
+        _ => None,
+    })
 }
 
 impl Screen for X11 {
@@ -508,6 +548,21 @@ pub fn base64(data: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn abstract_fallback_keeps_the_requested_display_and_screen() {
+        for name in [":0", ":7.2", "unix/:7.2"] {
+            let parsed = parse_display::parse_display(Some(name)).unwrap();
+            let number = if name == ":0" { 0 } else { 7 };
+            assert_eq!(abstract_path(&parsed), Some(format!("/tmp/.X11-unix/X{number}")));
+            assert_eq!(parsed.screen, if name == ":0" { 0 } else { 2 });
+        }
+        for name in ["remote:0", "localhost:0", "tcp/localhost:0"] {
+            let parsed = parse_display::parse_display(Some(name)).unwrap();
+            assert_eq!(abstract_path(&parsed), None);
+        }
+    }
 
     #[test]
     fn base64_padding() {

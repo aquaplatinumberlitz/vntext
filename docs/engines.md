@@ -151,6 +151,16 @@ Toàn bộ thông tin lấy từ chính mã của game, dịch ngược từ `As
 
 - Liệt kê vùng nhớ từ `/proc/<pid>/maps`, đọc qua `/proc/<pid>/mem`.
 - Chỉ đọc trang đang có mặt trong RAM (xem qua `/proc/<pid>/pagemap`). Đọc một trang trống của vùng shm sẽ khiến kernel cấp phát nó, có thể ngốn hàng GB.
+- Ngoại lệ dự phòng cho shin: nếu không tìm được kịch bản bằng pagemap,
+  đối chiếu file `/dev/shm/` trong `/proc/<pid>/fd` với mapping theo device/inode.
+  Chỉ khi có mapping ghi được bao trọn file từ offset 0, quét các extent đã
+  cấp phát mà `SEEK_DATA`/`SEEK_HOLE` trả về. Không đọc hole, không quét GPU,
+  không ghi RAM hoặc thay vị trí đọc trên file descriptor của game.
+  File shm còn dữ liệu không có nghĩa mọi alias còn PTE present/swapped:
+  Linux có thể bỏ PTE mà vẫn giữ dữ liệu trong backing file. Đây là nguyên
+  nhân Higurashi từng được nhận ra rồi mất nhận diện sau thời gian chạy.
+  Đường dự phòng có thể chậm hơn vì phải nạp lại trang; nếu filesystem không
+  hỗ trợ SEEK_DATA hoặc không có mapping phủ hết file thì bỏ qua dự phòng.
 - Khử trùng lặp theo (file, vị trí trang). Ryujinx map cùng một file shm hàng nghìn lần; không khử thì quét 512 GB địa chỉ ảo thay vì khoảng 4 GB thật.
 - Bỏ qua vùng thiết bị (`/dev/*` trừ shm) và vài vùng vô ích đã biết.
 - Tốc độ quét khoảng 1 GB/giây trên một luồng.

@@ -65,7 +65,7 @@ impl ksni::Tray for Tray {
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
-        let description = if self.reading { "Đang đọc một game" } else { "Chưa đọc game nào" };
+        let description = if self.reading { "Đang theo dõi game" } else { "Chưa theo dõi game nào" };
         ksni::ToolTip { title: "vntext".to_string(), description: description.to_string(), ..Default::default() }
     }
 
@@ -82,8 +82,8 @@ impl ksni::Tray for Tray {
                 }), ..Default::default() }.into()
         };
         vec![
-            item("Chọn game để đọc", "view-list-symbolic", true, Asked::Show),
-            item("Dừng đọc game", "media-playback-stop-symbolic", self.reading, Asked::Stop),
+            item("Chọn game để hiện phụ đề", "view-list-symbolic", true, Asked::Show),
+            item("Dừng theo dõi game", "media-playback-stop-symbolic", self.reading, Asked::Stop),
             ksni::MenuItem::Separator,
             item("Thoát vntext", "application-exit-symbolic", true, Asked::Quit),
         ]

@@ -4,6 +4,9 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io;
 use std::os::unix::fs::FileExt;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 const PAGE: u64 = 4096;
@@ -182,6 +185,54 @@ impl Proc {
         let mut stats = Stats::default();
         let maps = self.runs(all, keep, |run, m| self.read_run(run, &mut buf, m, &mut f, &mut stats))?;
         Ok(Stats { maps, ..stats })
+    }
+
+    /// A shared file may still hold game data after Linux clears every alias's
+    /// PTEs. Read only allocated extents through one complete writable mapping;
+    /// reading holes in an emulator's sparse RAM would allocate them.
+    pub fn scan_shared(
+        &self,
+        keep: impl Fn(&Mapping) -> bool,
+        mut f: impl FnMut(u64, &[u8], usize, &Mapping),
+    ) -> io::Result<Stats> {
+        let maps = read_maps(self.pid)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut stats = Stats::default();
+        let mut buf = vec![0u8; CHUNK];
+        for entry in fs::read_dir(format!("/proc/{}/fd", self.pid))?.flatten() {
+            let Ok(target) = fs::read_link(entry.path()) else { continue };
+            if !target.to_string_lossy().starts_with("/dev/shm/") {
+                continue;
+            }
+            // An fd may be closed and reused as a pipe between readlink and open.
+            let Ok(file) = fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY).open(entry.path()) else { continue };
+            let Ok(meta) = file.metadata() else { continue };
+            if !meta.is_file() || meta.len() == 0 {
+                continue;
+            }
+            let dev = format!("{:02x}:{:02x}", libc::major(meta.dev()), libc::minor(meta.dev()));
+            if seen.contains(&(meta.dev(), meta.ino())) {
+                continue;
+            }
+            let Some(map) = maps.iter().find(|m| {
+                m.shared() && m.wanted(false) && m.path.starts_with("/dev/shm/")
+                    && m.dev == dev && m.inode == meta.ino() && m.offset == 0
+                    && m.end - m.start >= meta.len() && keep(m)
+            }) else { continue };
+            seen.insert((meta.dev(), meta.ino()));
+            stats.maps += 1;
+            let mut offset = 0;
+            while offset < meta.len() {
+                let start = unsafe { libc::lseek(file.as_raw_fd(), offset as i64, libc::SEEK_DATA) };
+                if start < 0 || start as u64 >= meta.len() { break }
+                let end = unsafe { libc::lseek(file.as_raw_fd(), start, libc::SEEK_HOLE) };
+                if end <= start { break }
+                let end = (end as u64).min(meta.len());
+                self.read_run((map.start + start as u64, map.start + end), &mut buf, map, &mut f, &mut stats);
+                offset = end;
+            }
+        }
+        Ok(stats)
     }
 
     /// Hands the first `len` bytes of every resident page to `f(page address, bytes)`.
@@ -371,4 +422,47 @@ fn find(target: &str) -> Result<Option<(bool, u32, String)>, String> {
         }
     }
     Ok(best.map(|((named, _), pid, cmdline)| (named, pid, cmdline)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Seek, SeekFrom};
+
+    #[test]
+    fn shared_backing_is_found_without_pte_and_without_allocating_holes() {
+        let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path = PathBuf::from(format!("/dev/shm/vntext-test-{}-{unique}", std::process::id()));
+        let mut file = fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        let length = PAGE as usize * 16;
+        file.set_len(length as u64).unwrap();
+        let marker = b"synthetic shared scenario";
+        file.write_at(marker, PAGE * 2).unwrap();
+        file.write_at(b"last page", PAGE * 9).unwrap();
+        file.seek(SeekFrom::Start(13)).unwrap();
+        let before = file.metadata().unwrap();
+        let address = unsafe { libc::mmap(std::ptr::null_mut(), length, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, file.as_raw_fd(), 0) };
+        assert_ne!(address, libc::MAP_FAILED);
+        struct Mapped(*mut libc::c_void, usize);
+        impl Drop for Mapped {
+            fn drop(&mut self) { unsafe { libc::munmap(self.0, self.1); } }
+        }
+        let _mapped = Mapped(address, length);
+        let p = Proc::open(std::process::id()).unwrap();
+        let normal = p.scan_where(false, |m| m.inode == before.ino(), |_, _, _, _| {}).unwrap();
+        assert_eq!(normal.bytes, 0, "The new mapping has no present PTEs");
+        let mut found = None;
+        let shared = p.scan_shared(|m| m.inode == before.ino(), |base, data, _, _| {
+            if let Some(at) = memchr::memmem::find(data, marker) {
+                found = Some(base + at as u64);
+            }
+        }).unwrap();
+        assert_eq!(found, Some(address as u64 + PAGE * 2));
+        assert_eq!(shared.maps, 1);
+        assert_eq!(shared.bytes, PAGE * 2);
+        assert_eq!(file.metadata().unwrap().blocks(), before.blocks(), "Holes must remain unallocated");
+        assert_eq!(file.stream_position().unwrap(), 13, "The target's descriptor offset must not change");
+        assert_eq!(p.scan_shared(|_| false, |_, _, _, _| panic!("Excluded mappings must not be read")).unwrap().bytes, 0);
+    }
 }

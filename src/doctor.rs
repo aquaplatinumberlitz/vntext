@@ -65,7 +65,7 @@ pub fn checks(env: &Env) -> Vec<Check> {
     } else {
         Check::new("Dải nổi", false, "Desktop này không có layer-shell nên không đặt được dải nổi.", "Dùng KDE Plasma hoặc một desktop wlroots (Sway, Hyprland).")
     };
-    let x = Check::new("Cửa sổ X11 (XWayland)", env.x_server, if env.x_server { "Tới được máy chủ X, nơi cửa sổ game Wine/Proton nằm." } else { "Không tới được máy chủ X, nên tool không tìm được cửa sổ game." }, "Cài và bật XWayland (gói xorg-xwayland trên Arch, xwayland trên Debian/Ubuntu); trong KDE nó bật sẵn.");
+    let x = Check::new("Cửa sổ X11 (XWayland)", env.x_server, if env.x_server { "Tới được máy chủ X, nơi cửa sổ game Wine/Proton nằm." } else { "Không tới được máy chủ X, nên tool không tìm được cửa sổ game X11." }, "Kiểm tra DISPLAY/XAUTHORITY và XWayland của phiên desktop. Nếu XWayland chưa cài: xorg-xwayland trên Arch, xwayland trên Debian/Ubuntu. Nếu socket của phiên bị mất, lưu công việc rồi đăng xuất/đăng nhập lại; không cần đóng tool để xem chẩn đoán.");
     let memory = match env.ptrace.as_deref().map(str::trim) {
         None | Some("0") => Check::new("Đọc bộ nhớ game", true, "Tool đọc được bộ nhớ của tiến trình khác cùng người dùng.", ""),
         Some(value) => {

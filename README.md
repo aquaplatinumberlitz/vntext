@@ -70,11 +70,20 @@ Tool báo thiếu gì thì làm nấy:
 |---|---|
 | "Dải nổi": GNOME không có layer-shell | Dùng KDE Plasma, Sway hoặc Hyprland |
 | "Dải nổi": không phải phiên Wayland | Đăng xuất, chọn phiên Wayland ở màn hình đăng nhập |
-| "Cửa sổ X11 (XWayland)" | Cài `xorg-xwayland` (Arch) hoặc `xwayland` (Debian/Ubuntu) |
+| "Cửa sổ X11 (XWayland)" | Kiểm tra `DISPLAY`/`XAUTHORITY` của phiên desktop; cài `xorg-xwayland` (Arch) hoặc `xwayland` (Debian/Ubuntu) nếu chưa có. Nếu socket phiên bị mất hoàn toàn, lưu công việc rồi đăng xuất/đăng nhập lại. |
 | "Đọc bộ nhớ game", hoặc game ghi "bị từ chối đọc bộ nhớ" | Bấm "Cho phép" trong khung báo. Nó hỏi mật khẩu, ghi `/etc/sysctl.d/90-vntext-ptrace.conf` và áp dụng ngay. Thiết lập này cho mọi chương trình của cùng người dùng đọc bộ nhớ của nhau (mặc định trên Arch). Làm tay: `sudo sysctl kernel.yama.ptrace_scope=0` |
 | "Chụp cửa sổ qua KWin" | Bấm "Thêm vào menu ứng dụng" (hoặc chạy `vntext install`), rồi mở lại vntext |
 | "Nút chép (wl-copy)" | Cài `wl-clipboard` |
 | "Tra từ" | Thêm một từ điển, xem [Tra từ](#tra-từ) |
+
+Trên Linux, nếu file socket `/tmp/.X11-unix/X0` bị mất nhưng XWayland vẫn
+chạy, vntext thử socket abstract của đúng display đó, dùng nguyên Xauthority.
+Không cần khởi động lại desktop khi đường dự phòng này còn hoạt động. Nếu
+không kết nối được X11, cửa sổ chọn game vẫn mở để xem chẩn đoán và thử kết
+nối lại định kỳ; việc mở cửa sổ vẫn cần GTK kết nối được Wayland hoặc X11.
+
+vntext có giọng đọc A.I.VOICE2 trong dải nổi, mặc định tắt tự đọc.
+Xem [kế hoạch TTS và kết quả kiểm tra](docs/VNTEXT_TTS_PLAN.md).
 
 Tool không lưu gì gắn với một máy: mỗi lần chạy nó đọc lại script từ thư mục game và tìm lại vị trí đọc trong bộ nhớ theo nội dung, không theo địa chỉ. Cấu hình, cache dịch và kho từ điển nằm ngoài repo, ở `~/.config/vntext/`, `~/.cache/vntext/` và `~/.local/share/vntext/`; chép ba thư mục đó sang máy khác là mang theo được mọi thiết lập.
 
@@ -84,53 +93,146 @@ Tool không lưu gì gắn với một máy: mỗi lần chạy nó đọc lại
 
 1. Mở game tới chỗ có thoại.
 2. Mở vntext từ menu ứng dụng (hoặc gõ `vntext`).
-3. Chọn game trong danh sách rồi bấm **Đọc game này**. Dải nổi hiện ra cạnh cửa sổ game.
+3. Chọn game rồi bấm **Hiện phụ đề**. Quay lại cửa sổ game để thấy dải nổi.
 
-Cửa sổ chọn game liệt kê các game đang chạy. Dưới mỗi game ghi:
+Danh sách ưu tiên tên cửa sổ game; tên tiến trình và engine nằm ở dòng phụ.
+Trạng thái **Trích text trực tiếp** nghĩa là đã nhận ra profile.
+**Chưa nhận diện · có thể đọc từ ảnh** chưa khẳng định game không được hỗ trợ:
+đợi game nạp xong rồi bấm **Nhận diện lại** cạnh danh sách. Tool tự thử lại
+sau mỗi 30 giây khi game chưa nhận ra đang được chọn và launcher đang mở.
+Đổi game trong cùng emulator cũng có thể bấm nhận diện lại.
 
-- **tên engine · trích text trực tiếp từ game**: game được hỗ trợ trực tiếp, text đúng từng chữ.
-- **chưa hỗ trợ trực tiếp · đọc bằng OCR**: nút đổi thành **Đọc bằng OCR**, xem [OCR](#ocr-cho-game-chưa-hỗ-trợ).
+Với Higurashi/Umineko trên Ryujinx, tool còn thử tìm trong vùng shared memory
+đã cấp phát nếu lần quét trang nhớ thường không thấy kịch bản. Việc này xử lý
+trường hợp Linux đã bỏ các bảng trang của alias sau một thời gian; có thể mất
+thêm vài giây ở lần nhận diện đó. Không cần chuyển sang OCR chỉ vì gặp trường
+hợp này.
 
-Tuỳ chọn cho từng game, tool nhớ theo tên game:
+**Chi tiết kiểm tra** tự mở khi có vấn đề chặn dải nổi hoặc quyền đọc bộ nhớ.
+Những mục bổ sung nằm trong khung thu gọn, không che danh sách game.
+**Thiết lập chung** chứa nút **Thêm vào menu ứng dụng**.
 
-| Tuỳ chọn | Ý nghĩa |
-|---|---|
-| Dịch | Bật sẵn. |
-| Dịch sang | Ngôn ngữ đích, mặc định tiếng Việt. |
-| Dịch bằng | Nguồn dịch. Chưa chọn nguồn nào thì là Google, không cần key. |
-| Mở trong trình duyệt | Bật thì trang đọc (`http://127.0.0.1:8777`) tự mở bằng trình duyệt mặc định, để đọc và tra bằng Yomitan của trình duyệt. |
+Tuỳ chọn tự lưu theo tên ứng dụng: bật dịch, ngôn ngữ đích, nguồn dịch và
+mở trang đọc trong trình duyệt. Mặc định dịch sang tiếng Việt bằng Google
+nếu chưa có nguồn được cấu hình. Với emulator, hiện các game vẫn dùng chung
+khóa cấu hình theo tên tiến trình; cấu hình riêng theo Title ID sẽ làm sau.
+
+Trang web mặc định ở `http://127.0.0.1:8777`; nếu cổng bị chiếm, tool dùng
+cổng local trống và mở đúng địa chỉ mới. Dải nổi vẫn hoạt động.
 
 ### Icon khay
 
 vntext có icon chữ T ở khay hệ thống. Đóng cửa sổ chọn game chỉ cất nó vào khay.
 
-- **Bấm trái:** hiện lại cửa sổ chọn game.
-- **Chuột phải:** dừng đọc game, hoặc thoát hẳn.
-- Mở vntext lần nữa khi nó đang chạy sẽ hiện lại cửa sổ cũ, không mở cái thứ hai.
+- **Bấm trái:** hiện cửa sổ chọn game.
+- **Chuột phải:** dừng theo dõi game, hoặc thoát hẳn.
+- Mở vntext lần nữa sẽ hiện lại cửa sổ đang chạy.
 
 Desktop không có khay thì đóng cửa sổ là thoát.
 
 ### Dải nổi
 
-Dải nằm ngay dưới cửa sổ game (hết chỗ thì ở mép trên, bên trong cửa sổ) và chỉ hiện khi cửa sổ game đang được chọn. Trên dải có tên người nói, câu thoại, nhãn nguồn (`ENGINE` là trích từ game, `OCR` là đọc từ ảnh) và nút ghi nguồn đang dịch; bấm nút đó để đổi nguồn dịch.
+Dải bám theo cửa sổ game và chỉ hiện khi game được chọn. Dải đặt dưới cửa sổ;
+nếu thiếu chỗ thì đặt bên trong phía trên. Tên người nói, câu Nhật và bản dịch
+có phân cấp màu; nguồn text và dịch nằm ở hàng phụ. Đoạn dài có vùng cuộn riêng.
+Nhãn **Bản dịch / Nhật / Nhật + dịch** dùng được với mọi ngôn ngữ đích.
 
-Cụm nút bên phải cửa sổ game, từ trên xuống:
+Nút **loa nằm ngay bên phải câu Nhật trên dải**, đổi thành nút dừng khi đang
+tạo hoặc phát audio. Ở chế độ chỉ hiện bản dịch, loa vẫn ở cạnh câu thoại
+và đọc câu Nhật gốc. Chưa chọn giọng thì bấm loa sẽ mở tab Giọng đọc.
 
-| Nút | Việc |
+Thanh công cụ bên phải có bốn nút:
+
+| Nút | Tác dụng |
 |---|---|
-| Ẩn/hiện | Ẩn hoặc hiện dải. |
-| Mở khoá | Kéo `⠿` để dời dải, kéo `↔` để đổi bề rộng, quét chữ để chép. |
-| Chép | Chép câu đang hiện vào clipboard. |
-| Chế độ | Đổi giữa bản dịch, câu Nhật, hoặc cả hai. |
-| OCR | Bật/tắt đọc bằng ảnh chụp. |
-| Bánh răng | Mở hộp thiết lập. |
-| X | Dừng đọc, game vẫn chạy. Mở từ cửa sổ chọn game thì quay về đó. |
+| Ẩn/hiện | Ẩn dải, vẫn giữ thanh công cụ để hiện lại. |
+| Chế độ | Đổi bản dịch, câu Nhật hoặc cả hai; nút ghi rõ chế độ hiện tại. |
+| ⋯ | Khóa vị trí dải, chép câu đang hiện, mở OCR, dừng theo dõi game. |
+| Bánh răng | Thiết lập Hiển thị, Dịch, Từ điển và OCR. |
 
-- **Xem lại câu cũ:** lăn chuột trên dải. Dải ghi "3/40" khi đang xem câu cũ; có câu mới thì quay về câu mới nhất.
-- **Click xuyên qua:** ở chế độ chỉ hiện bản dịch, click đi xuyên qua dải xuống game.
-- **Chuột phải lên câu Nhật:** chép câu, và **Dịch lại câu này** khi bản dịch sai hoặc do nguồn dịch cũ làm.
-- **Hộp thiết lập** có bốn tab: Hiển thị (cỡ chữ, độ mờ nền, màu chữ, chế độ, đặt lại mặc định), Dịch, Từ điển, OCR. Đóng bằng nút X hoặc Esc. Thiết lập của dải lưu theo từng game.
-- **Lỗi** hiện bằng lời thường kèm nút việc nên làm; chuỗi lỗi gốc vẫn in ra terminal nếu bạn chạy từ đó.
+**Khóa vị trí** chỉ khóa di chuyển/đổi bề rộng. Quét chữ Nhật và rê chuột
+tra từ luôn dùng được. Bỏ khóa trong menu ⋯ hoặc tab Hiển thị để kéo `⠿`
+và `↔`. Bôi chọn mặc định không ghi đè clipboard; chuột phải chọn **Chép
+phần đã chọn**. Có tùy chọn **Tự chép phần chữ đã chọn**, tự lưu theo ứng dụng.
+Ở chế độ chỉ bản dịch và đang khóa vị trí, vùng trống vẫn cho click xuyên
+xuống game; các nút trên dải nhận chuột bình thường.
+
+**Lịch sử:** bấm trước/sau hoặc lăn chuột trên hàng điều khiển lịch sử.
+Cuộn trong vùng câu thoại chỉ cuộn đoạn dài. Khi xem câu cũ, nhãn ghi rõ
+**Lịch sử · số câu/tổng số**. Game chuyển câu không kéo người đọc khỏi lịch
+sử; bấm **Về câu mới** để tiếp tục theo dõi. Tool giữ tối đa 200 câu; câu
+cũ nhất sẽ rời bộ đệm khi đầy. Có câu mới trong game không tự phát âm thanh.
+
+**Thông báo:** nằm cạnh câu thoại, có nút đóng riêng. Thông báo lưu/đổi nguồn
+thành công tự hết sau 5 giây; lỗi giữ lời giải thích và nút khắc phục.
+Thông báo không thay mất câu Nhật/bản dịch, và bản dịch về không xóa vùng
+bôi chọn nếu câu Nhật chưa đổi. Chuột phải câu Nhật còn có **Dịch lại câu
+này** khi có bản dịch từ profile.
+
+**Thiết lập:** tiêu đề và nút đóng hiện ở cả năm tab, nội dung có vùng cuộn
+cho màn hình nhỏ. **Esc** luôn đóng bảng. Hiển thị, lựa chọn từ điển và
+công tắc OCR áp dụng ngay; API key/model/địa chỉ nguồn dịch chỉ lưu khi bấm
+**Lưu cấu hình dịch** hoặc Enter trong ô nhập. Đóng bảng không tự lưu các
+ô cấu hình dịch chưa lưu. Việc chọn một nguồn khác sẽ nạp cấu hình đã lưu
+của nguồn đó; hoàn tất lưu trước khi đổi nguồn.
+
+**Dừng theo dõi game** đóng phiên trích text/dải nổi và dừng TTS; game vẫn chạy.
+Muốn chỉ dừng âm thanh, bấm nút loa đang phát/chờ hoặc Dừng âm thanh trong
+tab Giọng đọc.
+
+### Nghe tiếng Nhật bằng A.I.VOICE2
+
+Cần dịch vụ A.I.VOICE2 headless đã cài và đang chạy, có voicebank, cùng
+`pw-play` (Arch: `pipewire-audio`, Debian/Ubuntu thường là `pipewire-bin`).
+Không cần mở Anki hoặc GUI A.I.VOICE2 để phát từ vntext.
+
+1. Bấm loa trên dải → tab **Giọng đọc** mở ra, tự kiểm tra kết nối/tải giọng.
+2. Chọn giọng, bấm **Nghe thử**, chỉnh âm lượng riêng của TTS nếu cần.
+3. Đóng thiết lập. Bấm loa để nghe **câu Nhật đang hiện**, dù chế độ hiển thị
+   chỉ có bản dịch. Quét một phần câu Nhật → chuột phải → **Nghe phần Nhật
+   đã chọn**. Nếu chưa có câu, tool báo rõ thay vì đọc thông báo trên dải.
+
+Tự đọc mặc định **tắt** vì game có thể đã có lồng tiếng. Bật **Tự đọc câu Nhật
+mới** trong tab Giọng đọc để đọc các câu tiếp theo. Đổi câu sẽ dừng tiếng cũ,
+bỏ câu chờ cũ và chỉ giữ câu mới nhất; bản dịch về không khiến câu Nhật bị
+đọc lại. Bấm dừng chỉ dừng lần nghe hiện tại; tắt công tắc tự đọc để dừng cả
+các lần tự đọc tiếp theo.
+
+Chuyển ứng dụng hoặc xem lịch sử tạm ngưng tự đọc; quay lại không phát lại
+các câu đã bỏ qua. Vẫn có thể bấm nghe thủ công câu lịch sử đang xem.
+Giọng, âm lượng, tự đọc được tự lưu. Ryujinx lưu riêng theo Title ID nếu đọc
+được từ tiêu đề; không có ID thì UI ghi rõ chỉ lưu theo phiên emulator.
+Đổi game trong cùng emulator: dừng theo dõi rồi mở phụ đề lại cho game mới.
+
+**Làm mới giọng** khi thêm/gỡ voicebank. Nếu giọng đã lưu bị gỡ, chọn giọng
+khác; không âm thầm thay bằng giọng mặc định. Akane ghi Kansai, các giọng
+khác dùng dialect backend khai báo. Endpoint cục bộ mặc định
+`http://127.0.0.1:17862`, đổi trong **Kết nối nâng cao** rồi bấm làm mới.
+Backend tắt/lỗi không dừng extraction, dịch hoặc tra từ.
+
+**Chuẩn bị audio trước khi nghe** mặc định bật: khi có giọng đã chọn và game
+đang được theo dõi, tool chuẩn bị câu ngắn đang hiện ở nền. Sau khi nghe,
+nếu profile có kịch bản thì đoán trước một câu kế tiếp để chuẩn bị thêm.
+Đây là dự đoán theo thứ tự script, có thể sai khi rẽ nhánh; chỉ phát khi
+câu và giọng thực tế khớp. OCR không có dữ liệu câu tiếp theo. Tắt tùy chọn
+này để giảm phần tổng hợp dự đoán không dùng tới.
+
+Backend tối ưu sẽ nạp nóng đúng giọng khi chọn/mở phiên và trả PCM dần ngay
+khi có chunk đầu; vntext phát qua PipeWire mà không đợi WAV hoàn chỉnh.
+Luồng phát được giữ sẵn giữa các lần nghe đã kết thúc. Đổi câu/dừng giữa
+chừng đóng đúng player hiện tại; lần sau tạo lại luồng phát. Backend cũ
+không hỗ trợ streaming vẫn được dùng qua WAV/memfd như trước.
+
+Cache RAM giữ tối đa 8 câu/32 MiB, mỗi mục dùng lại trong 120 giây, key gồm
+endpoint/giọng/text. Không ghi audio tạm ra đĩa từ vntext; backend vẫn lưu
+WAV làm cache. Cache backend có thể trả ngay khi engine đang bận. Tác vụ
+nghe được ưu tiên hơn tác vụ chuẩn bị chưa chạy, nhưng native synth đang
+chạy chưa hủy được: chuyển câu nhanh vẫn có thể phải chờ phần việc cũ kết
+thúc. Lần nạp voicebank bị swap hoặc đổi giọng vẫn có thể mất vài giây.
+Chưa có chỉnh tốc độ hoặc tự phát hiện câu đã lồng tiếng.
+
+Chi tiết cài backend thử, giao thức streaming và rollback:
+[integrations/aivoice2/README.md](integrations/aivoice2/README.md).
 
 ### Tra từ
 
@@ -213,7 +315,7 @@ vntext auto ryujinx --web --translate                # không dải nổi, đọ
 | `--overlay` | Hiện dải nổi cạnh cửa sổ game |
 | `--translate`, `--to LANG` | Dịch, và ngôn ngữ đích (mặc định `vi`) |
 | `--via TÊN`, `--model ID`, `--google` | Nguồn dịch và model; `--google` là `--via google` |
-| `--web`, `--port N`, `--open` | Phục vụ trang đọc ở `127.0.0.1:8777`; `--open` mở nó trong trình duyệt |
+| `--web`, `--port N`, `--open` | Phục vụ trang đọc ở `127.0.0.1:8777` hoặc cổng đã chọn; cổng bị chiếm thì tự chọn cổng trống và in địa chỉ thực tế. `--open` mở đúng địa chỉ đó trong trình duyệt |
 | `--clip` | Đưa mỗi đoạn vào clipboard (`wl-copy`) |
 | `--pick` | `ocr`: khoanh lại khung thoại |
 | `--raw` | In text nguyên dạng engine lưu, gồm cả mã điều khiển |
@@ -292,6 +394,8 @@ src/
     import.rs        Nhập file zip từ điển của Yomitan
     lookup.rs        Tra đoạn chữ trong kho hoặc qua Yomitan
   web.rs             `Hub`: kênh sự kiện chung của tool, và máy chủ trang đọc
+  tts.rs             Client A.I.VOICE2, câu chờ mới nhất, phát WAV trong RAM bằng pw-play
+  tts_audio.rs       Luồng PCM/PipeWire giữ sẵn, bộ đệm giới hạn, dừng đúng player
   page.html          Trang đọc cho trình duyệt
 tools/
   yomitan-dump.mjs   Xuất luật của Yomitan ra japanese.json và vectors.json
@@ -317,7 +421,7 @@ Profile engine là đường chính của tool: chỉ nó cho text đúng từng
 ### Bước 0: game có thật là engine mới không
 
 1. Mở game rồi mở vntext. Nếu dòng của game ghi tên engine thì đã xong: nhiều hãng dùng chung engine (YU-RIS chẳng hạn có rất nhiều hãng dùng).
-2. Nếu ghi "chưa hỗ trợ trực tiếp", nhìn file trong thư mục game để biết nó thuộc họ nào. Bảng dưới là các engine phổ biến chưa có profile, vì tác giả chưa có game nào thuộc chúng để đo:
+2. Nếu vẫn ghi "Chưa nhận diện" sau khi vào đoạn thoại và nhận diện lại, nhìn file trong thư mục game để biết nó thuộc họ nào. Bảng dưới là các engine phổ biến chưa có profile, vì tác giả chưa có game nào thuộc chúng để đo:
 
 | Engine | File đặc trưng | Game ví dụ | Bắt đầu từ |
 |---|---|---|---|

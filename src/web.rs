@@ -48,8 +48,12 @@ impl Hub {
         rx
     }
 
-    pub fn serve(&self, port: u16) -> std::io::Result<()> {
-        let listener = TcpListener::bind(("127.0.0.1", port))?;
+    pub fn serve(&self, port: u16) -> std::io::Result<u16> {
+        let listener = match TcpListener::bind(("127.0.0.1", port)) {
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => TcpListener::bind(("127.0.0.1", 0))?,
+            result => result?,
+        };
+        let port = listener.local_addr()?.port();
         let hub = self.clone();
         thread::spawn(move || {
             for stream in listener.incoming().flatten() {
@@ -59,7 +63,7 @@ impl Hub {
                 });
             }
         });
-        Ok(())
+        Ok(port)
     }
 
     fn handle(&self, mut stream: TcpStream, port: u16) -> std::io::Result<()> {
@@ -127,6 +131,26 @@ fn local(host: &str, port: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_busy_port_keeps_the_page_on_a_free_local_port() {
+        let occupied = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let busy = occupied.local_addr().unwrap().port();
+        let hub = Hub::default();
+        let port = hub.serve(busy).unwrap();
+        assert_ne!(port, busy);
+        let request = |host: u16| {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            write!(stream, "GET / HTTP/1.1\r\nHost: 127.0.0.1:{host}\r\n\r\n").unwrap();
+            let mut response = String::new();
+            std::io::Read::read_to_string(&mut stream, &mut response).unwrap();
+            response
+        };
+        assert!(request(port).starts_with("HTTP/1.1 200 OK"));
+        assert!(request(busy).starts_with("HTTP/1.1 403 Forbidden"));
+        assert_eq!(occupied.local_addr().unwrap().port(), busy);
+    }
 
     #[test]
     fn only_this_machine_is_served() {
