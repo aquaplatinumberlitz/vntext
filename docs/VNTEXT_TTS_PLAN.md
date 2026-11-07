@@ -126,13 +126,26 @@ warm-up và prefetch. Vẫn trên `feat/uiux-before-tts`, chưa commit/merge.
 6. `src/tts_audio.rs` giữ pw-play raw PCM stdin sau khi một câu phát hết,
    bộ đệm tối đa 16 MiB. Dừng/chuyển câu khi bận đóng đúng player, không
    để PCM cũ còn trong thiết bị; lần sau tạo lại. PDEATHSIG giữ cleanup
-   khi reader chết. Cache client tối đa 8 câu/32 MiB/120 giây, thay cho
-   một câu/30 giây. Cache disk backend kế thừa chưa có quota.
+   khi reader chết. Cache client giới hạn 32 MiB/120 giây, thay cho một câu/30
+   giây. Số bản ghi thực tế tối đa 7; ghi chú cũ nêu mức dự kiến 8.
+   Ngày 2026-11-07 bổ sung quota WAV backend 512 MiB và hết hạn 7 ngày.
 7. Capability negotiation: backend cũ tự dùng lại WAV/memfd. Session random
    riêng theo reader; foreground và preparation dùng cùng native worker.
    HTTP local tắt proxy, Connection: close để tương thích server HTTP/1.0.
 
 ### Kiểm chứng và giới hạn
+
+Đợt cache 2026-11-07: chủ dự án duyệt quota WAV 512 MiB, loại file ít dùng
+gần đây nhất và hết hạn 7 ngày. `integrations/aivoice2/wav_cache.py` giữ
+lease cho file đang tổng hợp/trả HTTP, dọn khi khởi động/sau publish/mỗi
+60 giây và dọn lại khi lease cuối đóng nếu còn vượt quota. Chỉ tác động
+WAV cache có tên hash của backend, không theo symlink. Healthz có thống kê
+cache. Giữ RAM 32 MiB/120 giây và lookahead 1 đoạn; không triển khai 3–5
+đoạn khi chưa có dữ liệu nhánh/tỷ lệ sử dụng dự đoán.
+
+13 test Python qua: quota, LRU sau restart, hết hạn, file ngoài phạm vi,
+lease lồng nhau và dọn đồng thời, publish atomic; HTTP WAV và cached PCM
+vẫn trả đủ dữ liệu khi quota chỉ 1 byte, rồi file mới bị dọn sau giao xong.
 
 - Rust: 131 test đạt, 4 GUI/live test bỏ qua mặc định. Thêm test giới hạn
   frame, stream bị cắt, stale response, final error, preparation và output WAV.

@@ -104,7 +104,10 @@ sau mỗi 30 giây khi game chưa nhận ra đang được chọn và launcher �
 Đổi game trong cùng emulator cũng có thể bấm nhận diện lại.
 
 Với Higurashi/Umineko trên Ryujinx, tool còn thử tìm trong vùng shared memory
-đã cấp phát nếu lần quét trang nhớ thường không thấy kịch bản. Việc này xử lý
+đã cấp phát nếu lần quét trang nhớ thường không thấy kịch bản hoặc vị trí
+đang đọc. Tool ưu tiên kịch bản trong RAM guest thay cho bản sao trong heap
+của emulator, để mở lại khi game đang đứng ở một câu vẫn lấy được câu đó.
+Việc này xử lý
 trường hợp Linux đã bỏ các bảng trang của alias sau một thời gian; có thể mất
 thêm vài giây ở lần nhận diện đó. Không cần chuyển sang OCR chỉ vì gặp trường
 hợp này.
@@ -150,13 +153,26 @@ Hàng điều khiển trên đầu dải dịu đi khi chuột rời khung, khô
 | Chế độ | Đổi bản dịch, câu Nhật hoặc cả hai; nút ghi rõ chế độ hiện tại. |
 | ⋯ | Chỉnh bố cục, chép câu đang hiện, mở OCR, dừng theo dõi game. |
 | Bánh răng | Thiết lập Hiển thị, Dịch, Từ điển, OCR và Giọng đọc. |
-| Thu gọn (−) | Gấp cả khung thành nút **vntext · Hiện** tại chỗ; bấm nút này để mở lại. |
+| Thu gọn (−) | Gấp cả khung thành nút **icon vntext** tại chỗ, cùng hình với desktop/tray; bấm để mở lại, giữ và kéo để dời icon. |
+
+Icon thu nhỏ kéo được ngay, không cần mở Chỉnh bố cục. Kéo ít nhất 4 px
+sẽ di chuyển icon; thả sau khi kéo không mở phụ đề. Vị trí icon lưu riêng,
+không đổi bề rộng/chiều cao dải. Khi bấm mở, dải hiện gần icon và tự giữ trong
+màn hình. **Đặt lại bố cục** xóa vị trí icon đã lưu.
+
+Chiều cao tự động dành đủ chỗ cho câu đã xuống dòng, tối thiểu khoảng hai
+dòng mỗi ngôn ngữ. Đoạn dài cuộn khi đạt giới hạn; hàng nguồn dịch, thông báo
+và lịch sử nằm ngoài vùng cuộn nên không ép chữ thành một khe nhỏ. Khung có
+padding 20 px ngang, 16 px dọc; câu Nhật cách bản dịch 12 px. Vị trí mặc định
+cách hai mép game 16 px; vị trí/bề rộng đã chỉnh tay vẫn được giữ.
 
 **Chỉnh bố cục:** mở **⋯ → Chỉnh bố cục…** hoặc nút cùng tên trong tab
 Hiển thị. Dải hiện viền và tay nắm ở bốn cạnh/bốn góc. Kéo vùng **⠿ Kéo để
 di chuyển** trên tiêu đề để dời dải; kéo cạnh hoặc góc để đổi cả chiều rộng
 và chiều cao. Các nút trên tiêu đề vẫn dùng bình thường. Vị trí/kích thước
 tự lưu riêng theo game, bám theo cửa sổ game và được giữ trong màn hình.
+Click hoặc giữ chuột đứng yên không dời dải. Thao tác kéo bắt đầu khi chuột
+đi ít nhất 4 px; dừng chuột thì dải dừng theo, thả chuột kết thúc thao tác.
 
 Trong chế độ chỉnh có thanh **Độ đậm nền** (20–100%) xem thay đổi ngay;
 chỉ nền thay đổi, chữ và nút vẫn rõ. **Chiều cao tự động** mặc định bật.
@@ -187,7 +203,9 @@ bôi chọn nếu câu Nhật chưa đổi. Chuột phải câu Nhật còn có 
 này** khi có bản dịch từ profile.
 
 **Thiết lập:** tiêu đề và nút đóng hiện ở cả năm tab, nội dung có vùng cuộn
-cho màn hình nhỏ. **Esc** luôn đóng bảng. Hiển thị, lựa chọn từ điển và
+cho màn hình nhỏ. Ô cỡ chữ dùng nền tối, số căn giữa và nút `− / +` tương
+phản rõ; nhóm tùy chọn trong launcher có đệm trong 16 px để chữ và điều
+khiển cách viền. **Esc** luôn đóng bảng. Hiển thị, lựa chọn từ điển và
 công tắc OCR áp dụng ngay; API key/model/địa chỉ nguồn dịch chỉ lưu khi bấm
 **Lưu cấu hình dịch** hoặc Enter trong ô nhập. Đóng bảng không tự lưu các
 ô cấu hình dịch chưa lưu. Việc chọn một nguồn khác sẽ nạp cấu hình đã lưu
@@ -198,6 +216,11 @@ Muốn chỉ dừng âm thanh, bấm nút loa đang phát/chờ hoặc Dừng â
 tab Giọng đọc.
 
 ### Nghe tiếng Nhật bằng A.I.VOICE2
+
+Chuẩn bị audio giữ tối đa một đoạn kế tiếp để hạn chế đoán nhầm nhánh truyện.
+Cache nghe lại trong RAM có quota 32 MiB, cửa sổ tái dùng 120 giây. WAV cache
+backend có quota 512 MiB và tự dọn file không dùng 7 ngày; file đang tạo/đọc
+được giữ đến khi xong. PCM vẫn stream trực tiếp sang vntext khi tổng hợp.
 
 Cần dịch vụ A.I.VOICE2 headless đã cài và đang chạy, có voicebank, cùng
 `pw-play` (Arch: `pipewire-audio`, Debian/Ubuntu thường là `pipewire-bin`).

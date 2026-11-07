@@ -4,6 +4,43 @@ Tài liệu này ghi lại, cho từng profile trong `src/engines/`, script củ
 
 Mỗi họ engine có một profile (`engines/`) biết script của game nằm ở đâu và engine giữ vị trí đang đọc ở ô nhớ nào. `auto` thử lần lượt các profile và dùng cái nhận ra game.
 
+## Việc kiểm tra sau: mở lại vntext khi game vẫn chạy
+
+Ghi nhận ngày 2026-11-07. Chủ dự án để dành kiểm tra khi có thời gian;
+chưa chạy thêm game hoặc mở rộng bản sửa sang các profile khác.
+
+| Profile/game | Bằng chứng hiện có | Việc còn lại |
+|---|---|---|
+| shin / Umineko Saku | Đã sửa chọn nhầm bản SNR trong heap; hai phiên đọc mới lấy đúng câu đang đứng, chủ dự án xác nhận dải đã hiện text. | Thử load save và quay lại từ menu. |
+| shin / Higurashi Hou | Dùng chung đường chọn SNR và tìm VM với Umineko, nên bản sửa hiện tại cũng áp dụng. | Test lại trực tiếp bằng bản sửa mới; chưa được tính là đã nghiệm thu chỉ vì dùng chung code. |
+| Bishop | Tìm script trong RAM và bám khối VM riêng; chưa có bằng chứng gặp đúng lỗi chọn nhầm vùng nhớ của shin. | Kiểm tra vị trí đầu tiên và khả năng phân biệt VM thật/bản sao sau load save. |
+| Escude | Khi các ứng viên chỉ cùng một câu thì tin ngay; khi chúng khác nhau thì chờ chuyển câu để xác minh. | Phân biệt việc chờ xác minh có chủ đích với lỗi không khôi phục được câu hiện tại. |
+| Ninetail | Tin ngay khi chỉ có một ứng viên; nhiều object cũ/live có thể phải chờ chuyển câu để xác minh. | Kiểm tra sau mở lại và load save, khi object cũ còn trong RAM. |
+| SPT, MED, CatSystem2, AGE, ARK, YU-RIS, Liar | Đọc kịch bản từ file, không dùng đường chọn SNR trong heap của shin; mới rà mã, chưa test tình huống mở lại trong đợt này. | Chạy bộ tình huống bên dưới cho từng profile. |
+
+Nguy cơ chung: các profile vẫn dùng bộ quét `Proc::scan` dựa vào trạng thái
+present/swapped trong pagemap. Nếu dữ liệu nằm trong shared backing còn cấp
+phát nhưng mọi alias mất cả hai bit này, việc tìm vị trí có thể bỏ sót.
+Đường dự phòng `scan_shared` hiện được shin gọi; chưa phải bản sửa chung cho
+mọi engine. Đây là nguy cơ từ việc rà mã, chưa phải lỗi đã tái hiện trên tất
+cả các game. Từng profile cần xác minh cấu trúc và quy tắc tin ứng viên trước
+khi thay đổi cách tìm vị trí.
+
+Danh sách thực hiện khi quay lại việc này:
+
+- [ ] Higurashi: đóng/mở vntext khi game đứng yên ở một câu; xác nhận lấy đúng câu đó mà không chuyển câu.
+- [ ] Bishop, Escude, Ninetail: chạy cùng tình huống, ghi rõ có chờ xác minh ứng viên hay không và cần bao nhiêu lần chuyển câu.
+- [ ] SPT, MED, CatSystem2, AGE, ARK, YU-RIS, Liar: lần lượt chạy tình huống mở lại khi đứng yên.
+- [ ] Với từng profile: load save sang câu khác, xác nhận bám câu mới thay vì trạng thái cũ.
+- [ ] Với từng profile: về menu rồi quay lại game; kiểm tra có tìm lại vị trí và loại câu cũ đúng không.
+
+Khi ghi kết quả, lưu tên game/profile, phiên bản vntext, tình huống, độ trễ
+đến câu đầu tiên, số ứng viên/trusted và kết quả đối chiếu trên màn hình.
+Chỉ ghi metadata hoặc chỉ số câu, không log hàng loạt thoại. Khi phân biệt
+lỗi trích text với hiển thị, kiểm tra dải đang mở, chế độ **Nhật + dịch**,
+game đang được chọn và không bật OCR thay cho profile. Game do chủ dự án mở
+và thao tác; không tự mở game hoặc giả lập chuột/phím trên desktop.
+
 ## shin: Entergram (Umineko, Higurashi)
 
 
@@ -17,6 +54,44 @@ Không phải ô nào khớp dạng cũng là ô thật. Game giữ các bản s
 
 - Ô nằm ở đầu trang nhớ, tại offset `0x10`, được tin ngay. Mọi ô thật quan sát được trên cả hai game đều nằm ở đó, bản sao thì không. Nhờ vậy lần tìm thông thường chỉ đọc vài byte đầu mỗi trang (dưới 1 giây thay vì khoảng 5 giây quét cả RAM).
 - Ô ở chỗ khác chỉ được tin khi nó tiến từng bước nhỏ về phía trước hai lần liên tiếp, như một người đang đọc. Một phần mười số lần tìm là quét kỹ để thấy các ô loại này.
+
+### Mở lại khi Ryujinx vẫn chạy (2026-11-07)
+
+Ryujinx có thể giữ hai bản SNR giống nhau: bản trong RAM guest shared và bản
+sao trong heap native. Bản heap vẫn giải mã đúng, nhưng `home = (00:00, 0)`
+làm bộ tìm vị trí chỉ quét vùng anonymous, trong khi VM thật nằm ở file shm.
+Khi ấy launcher nhận đúng tên game nhưng reader dừng ở "waiting for the game
+to show text", dải không nhận câu đầu tiên.
+
+Khắc phục: ưu tiên ứng viên có backing file; nếu quét thường chỉ có bản heap,
+vẫn tìm trong các extent shared đã cấp phát trước khi dùng bản đó. Nếu không
+thấy VM trong các trang resident, quét extent thuộc đúng `home` và kiểm tra
+đầu mỗi trang với cùng cặp start/end ở offset 0x10/0x08. Không đọc hole hoặc
+nới tiêu chuẩn tin ô vị trí. Vòng đọc hiện có phát câu đang đứng ngay khi
+nhận được ô trusted, không cần người chơi chuyển câu.
+
+Bằng chứng trên Umineko đang chạy: hai bản có cùng 72.968 đoạn, kích thước
+9.691.136 byte; bản heap tìm được 0 ô. Bản shared tìm được 2 ô, chỉ 1 ô trusted
+(index 154); ô bản sao khác ở index 150 vẫn không trusted. Probe chỉ ghi
+metadata, không lưu nội dung thoại.
+
+Bản sửa qua 135 unit test. Hai phiên `auto` mới liên tiếp trên game đang
+đứng yên đều phát index 154 sau 2.262 ms và 2.126 ms, không bật dịch/OCR/TTS,
+stdout thoại bỏ đi. Kết quả metadata ở `target/diagnostics/shin-reopen.json`.
+
+Test hồi quy: ưu tiên bản guest trước bản anonymous hợp lệ; VM trong file shm
+sparse không có PTE, drop PTE rồi mở lại vẫn lấy đúng vị trí mới, loại cặp
+start/end sai và không làm tăng block file.
+
+Probe chỉ đọc khi cần chẩn đoán với game đang hiện thoại:
+
+```sh
+cargo test --release --locked --no-run
+VNTEXT_SHIN_PID=<pid> target/release/deps/vntext-<hash> --exact engines::shin::tests::live_position --ignored --nocapture
+```
+
+Dùng đường dẫn test binary Cargo in ra. Probe báo inode, số ô và độ trễ;
+không mở game, không chuyển câu, không dùng dịch máy hoặc TTS.
 
 Text của shin là Shift-JIS, trong đó hiragana và vài dấu câu được ghi bằng katakana nửa độ rộng một byte, xen với lệnh `@` (`@r` xuống dòng, `@k` chờ bấm, `@v` voice, `@c` màu, `@b…@<…@>` furigana, ...). `engines/shin/text.rs` chuyển về text đọc được. Bảng ký tự và cú pháp lệnh lấy từ [DCNick3/shin](https://github.com/DCNick3/shin) (MPL-2.0).
 

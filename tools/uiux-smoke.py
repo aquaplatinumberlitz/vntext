@@ -2,7 +2,8 @@
 """Exercise the real GTK overlay in a private, virtual KWin session.
 
 Build with cargo test --release --locked --no-run, then pass the test binary.
-No games or desktop input tools are used. All sentences and settings are fixtures.
+No games or input on the user's desktop are used. Sentences/settings are fixtures.
+--pointer optionally sends guarded pointer events only to the private compositor.
 """
 
 import argparse
@@ -26,7 +27,11 @@ def private():
             document = root / 'runtime/doc'
             mounts = Path('/proc/self/mountinfo').read_text().splitlines()
             if any(line.split()[4] == str(document) for line in mounts):
-                subprocess.run(['fusermount3', '-u', '-z', str(document)], check=True)
+                result = subprocess.run(['fusermount3', '-u', '-z', str(document)], capture_output=True, text=True)
+                # The portal may unmount it between reading mountinfo and fusermount.
+                mounts = Path('/proc/self/mountinfo').read_text().splitlines()
+                if result.returncode and any(line.split()[4] == str(document) for line in mounts):
+                    raise RuntimeError(f'Cannot unmount private portal: {result.stderr.strip()}')
 
 
 def children(pid):
@@ -74,6 +79,9 @@ def run(binary, size, output):
             VNTEXT_UI_TEST='isolated',
             VNTEXT_UI_OUTPUT=str(output.resolve()),
         )
+        if env.get('VNTEXT_UI_POINTER'):
+            # Only this private KWin process accepts the guarded test input helper.
+            env['KWIN_WAYLAND_NO_PERMISSION_CHECKS'] = '1'
         runner = root / 'session.py'
         runner.write_text(
             '#!/usr/bin/env python3\n'
@@ -81,7 +89,7 @@ def run(binary, size, output):
             'os.environ["WAYLAND_DISPLAY"] = "vntext-uiux-test"\n'
             f'command = {str([str(binary), "--exact", "overlay::tests::uiux_smoke", "--ignored", "--nocapture"])}\n'
             'try:\n'
-            '    code = subprocess.run(command, timeout=25).returncode\n'
+            '    code = subprocess.run(command, timeout=40).returncode\n'
             '    if code == 0:\n'
             '        command[2] = "launcher::tests::uiux_smoke"\n'
             '        code = subprocess.run(command, timeout=10).returncode\n'
@@ -103,7 +111,7 @@ def run(binary, size, output):
         with (output / 'session.log').open('w') as log:
             process = subprocess.Popen(command, env=env, stdout=log, stderr=log)
             try:
-                process.wait(timeout=45)
+                process.wait(timeout=55)
             except subprocess.TimeoutExpired:
                 for pid in children(process.pid):
                     try:
@@ -122,7 +130,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('test_binary', type=Path)
     parser.add_argument('--output', type=Path, default=Path('target/diagnostics/uiux'))
+    parser.add_argument('--pointer', action='store_true', help='Also test pointer events in private KWin (requires cc and libwayland-client headers)')
     args = parser.parse_args()
+    if args.pointer:
+        args.output.mkdir(parents=True, exist_ok=True)
+        helper = args.output.resolve() / 'private-pointer'
+        subprocess.run(['cc', str(Path(__file__).with_name('uiux-pointer.c')), '-o', str(helper), '-lwayland-client', '-lm'], check=True)
+        os.environ['VNTEXT_UI_POINTER'] = str(helper)
     for dimensions in [(1024, 768), (800, 600)]:
         run(args.test_binary.resolve(), dimensions,
             args.output / f'{dimensions[0]}x{dimensions[1]}')
