@@ -374,9 +374,11 @@ def main():
     global CONFIG, engine
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config')
-    parser.add_argument('--worker', type=Path, required=True)
+    parser.add_argument('--worker', type=Path)
     args = parser.parse_args()
-    CONFIG = replace(load_config(args.config), runtime_dir=args.worker.resolve().parent)
+    CONFIG = load_config(args.config)
+    if args.worker:
+        CONFIG = replace(CONFIG, runtime_dir=args.worker.resolve().parent)
     engine = Engine(CONFIG)
     if CONFIG.development_fallback:
         print('Development fallback: configure AIVOICE2_CONFIG for a managed installation.', flush=True)

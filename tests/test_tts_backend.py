@@ -16,7 +16,8 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'integrations/aivoice2'))
-sys.path.append('/home/admin/aivoice2-re/src/daemon')
+support = Path(os.environ.get('AIVOICE2_SUPPORT_DIR', Path.home() / '.local/share/aivoice2-local/runtime'))
+sys.path.append(str(support))
 from scheduler import Scheduler, Busy
 from wav_cache import WavCache
 import server
