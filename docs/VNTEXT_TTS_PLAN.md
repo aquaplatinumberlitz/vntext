@@ -1,5 +1,7 @@
 # Pipeline vntext → A.I.VOICE2
 
+> Cập nhật kiến trúc 2026-11-07: Hồ sơ triển khai/benchmark TTS trước khi tách repo. Server/worker/cache/test Python đã chuyển sang aivoice2api; các đường dẫn backend/drop-in cũ dưới đây không dùng để triển khai mới. Xem TTS_CLIENT_VI.md và kiến trúc chung.
+
 Ngày 2026-11-06: chủ dự án xác nhận bản tối ưu hoạt động và duyệt merge
 `feat/uiux-before-tts` vào main. Các mốc chưa commit/chưa nghiệm thu bên
 dưới mô tả lịch sử từng bước, không phải trạng thái bàn giao hiện tại.

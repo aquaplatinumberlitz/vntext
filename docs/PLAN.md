@@ -1,5 +1,7 @@
 # Plan: vntext thân thiện cho người mới
 
+> Cập nhật kiến trúc 2026-11-07: Mục 1–3 vẫn là quy tắc làm việc. Các mốc, số test và đường dẫn workspace trong phần kế hoạch là lịch sử; bố trí repo hiện tại xem ARCHITECTURE_VI.md.
+
 Tài liệu giao việc cho người (hoặc model) implement. Đọc hết mục 1 đến 3 trước
 khi đụng code. Mỗi giai đoạn ở mục 4 tự đứng được: làm xong, dừng, chờ chủ dự án
 test trong game thật rồi mới sang giai đoạn sau.

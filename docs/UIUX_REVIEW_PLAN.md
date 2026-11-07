@@ -1,5 +1,7 @@
 # Cải tiến UI/UX trước TTS
 
+> Cập nhật kiến trúc 2026-11-07: Hồ sơ triển khai UI đã merge. Nhánh/worktree và các yêu cầu chờ test dưới đây theo thời điểm lịch sử; hướng dẫn hiện hành ở README.md của sản phẩm và docs/README.md.
+
 Ngày 2026-11-06: chủ dự án đã thử UI/TTS và duyệt merge vào main. Các ghi
 chú về nhánh thử/chờ nghiệm thu dưới đây giữ lại làm lịch sử triển khai.
 

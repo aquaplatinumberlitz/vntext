@@ -84,7 +84,7 @@ không kết nối được X11, cửa sổ chọn game vẫn mở để xem ch�
 nối lại định kỳ; việc mở cửa sổ vẫn cần GTK kết nối được Wayland hoặc X11.
 
 vntext có giọng đọc A.I.VOICE2 trong dải nổi, mặc định tắt tự đọc.
-Xem [kế hoạch TTS và kết quả kiểm tra](docs/VNTEXT_TTS_PLAN.md).
+Xem [client TTS hiện hành](docs/TTS_CLIENT_VI.md); [kế hoạch và số đo lịch sử](docs/VNTEXT_TTS_PLAN.md).
 
 Tool không lưu gì gắn với một máy: mỗi lần chạy nó đọc lại script từ thư mục game và tìm lại vị trí đọc trong bộ nhớ theo nội dung, không theo địa chỉ. Cấu hình, cache dịch và kho từ điển nằm ngoài repo, ở `~/.config/vntext/`, `~/.cache/vntext/` và `~/.local/share/vntext/`; chép ba thư mục đó sang máy khác là mang theo được mọi thiết lập.
 
@@ -217,8 +217,10 @@ tab Giọng đọc.
 
 ### Nghe tiếng Nhật bằng A.I.VOICE2
 
-Dev mới: đọc [hướng dẫn nối A.I.VOICE2 với Anki/vntext](docs/AIVOICE2_CONNECT_VI.md)
-để cài runtime chung, tìm đúng URL/service, kiểm WAV và nâng cấp backend có rollback.
+Dev mới: bắt đầu ở [chỉ mục tài liệu](docs/README.md) và [client TTS](docs/TTS_CLIENT_VI.md).
+Backend chính nằm ở [aivoice2api](https://github.com/aquaplatinumberlitz/aivoice2api);
+[hướng dẫn chung](https://github.com/aquaplatinumberlitz/aivoice2api/blob/main/docs/CONNECT_VI.md)
+chỉ duy trì tại đó. `aivoice2api.lock.json` ghim bản backend tham chiếu cho QA.
 
 Chuẩn bị audio giữ tối đa một đoạn kế tiếp để hạn chế đoán nhầm nhánh truyện.
 Cache nghe lại trong RAM có quota 32 MiB, cửa sổ tái dùng 120 giây. WAV cache
@@ -274,8 +276,8 @@ chạy chưa hủy được: chuyển câu nhanh vẫn có thể phải chờ ph
 thúc. Lần nạp voicebank bị swap hoặc đổi giọng vẫn có thể mất vài giây.
 Chưa có chỉnh tốc độ hoặc tự phát hiện câu đã lồng tiếng.
 
-Chi tiết cài backend thử, giao thức streaming và rollback:
-[integrations/aivoice2/README.md](integrations/aivoice2/README.md).
+Chi tiết kết nối client ở [TTS_CLIENT_VI](docs/TTS_CLIENT_VI.md); API, build
+và rollback backend ở [aivoice2api/docs](https://github.com/aquaplatinumberlitz/aivoice2api/tree/main/docs).
 
 ### Tra từ
 
@@ -443,6 +445,9 @@ src/
 tools/
   yomitan-dump.mjs   Xuất luật của Yomitan ra japanese.json và vectors.json
 docs/
+  README.md          Chỉ mục tài liệu hiện hành và hồ sơ lịch sử
+  ARCHITECTURE_VI.md  Ranh giới ba repo và source của vntext
+  TTS_CLIENT_VI.md    Kết nối TTS, phát/cache/lookahead và test client
   engines.md         Ghi chú kỹ thuật từng engine
   PLAN.md            Kế hoạch đã dùng để làm phần giao diện cho người mới
 ```

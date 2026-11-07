@@ -1,5 +1,7 @@
 # Dải nổi hợp nhất
 
+> Cập nhật kiến trúc 2026-11-07: Thiết kế dải nổi đã triển khai. Các lệnh smoke, tên nhánh và kết quả bên dưới là hồ sơ tại thời điểm đo; kiểm tên binary hiện tại trước khi chạy. Backend TTS hiện thuộc aivoice2api.
+
 Nhánh triển khai: `feat/unified-overlay`, dựa trên `main` tại `02de868`.
 Ngày 2026-11-06, chủ dự án đã thử bản mới, xác nhận "ok rồi" và duyệt merge/push.
 
