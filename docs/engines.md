@@ -1,6 +1,6 @@
 # Ghi chú kỹ thuật từng engine
 
-Tài liệu này ghi lại, cho từng profile trong `src/engines/`, script của game nằm ở đâu, được mã hoá thế nào, và tool biết game đang đứng ở câu nào bằng cách gì. Đọc nó khi sửa một profile có sẵn hoặc khi cần ví dụ để viết profile mới (xem mục "Mở rộng engine khi gặp game mới" trong [README](../README.md)).
+Tài liệu này ghi lại, cho từng profile trong `src/engines/`, script của game nằm ở đâu, được mã hoá thế nào, và tool biết game đang đứng ở câu nào bằng cách gì. Đọc nó khi sửa một profile có sẵn hoặc khi cần ví dụ để viết profile mới (xem [hướng dẫn mở rộng engine](DEVELOPMENT_VI.md#mở-rộng-engine-khi-gặp-game-mới)).
 
 Mỗi họ engine có một profile (`engines/`) biết script của game nằm ở đâu và engine giữ vị trí đang đọc ở ô nhớ nào. `auto` thử lần lượt các profile và dùng cái nhận ra game.
 

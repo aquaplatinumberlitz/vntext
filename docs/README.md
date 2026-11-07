@@ -1,24 +1,29 @@
 # Tài liệu vntext
 
-Cập nhật 2026-11-07: vntext là client/extractor; backend TTS có nguồn riêng.
+**Lần đầu nối A.I.VOICE2 + Anki + vntext: [Quickstart chung](https://github.com/aquaplatinumberlitz/aivoice2-anki/blob/main/docs/QUICKSTART_VI.md).**
+Chỉ cần vntext độc lập thì bắt đầu tại INSTALL_VI; không cần backend TTS.
 
-| Nhu cầu | Tài liệu | Trạng thái |
-|---|---|---|
-| Cài/build, sử dụng launcher, overlay và mở rộng profile | [README](../README.md) | Hướng dẫn chính của sản phẩm |
-| Ranh giới source giữa ba repo | [ARCHITECTURE_VI](ARCHITECTURE_VI.md) | Hiện hành |
-| Nối backend, playback/lookahead/cache và test client | [TTS_CLIENT_VI](TTS_CLIENT_VI.md) | Hiện hành |
-| Định dạng/profile game và backlog kiểm tra shin/Higurashi | [engines](engines.md) | Ghi chú kỹ thuật + ca chưa nghiệm thu |
-| Layout/resize/opacity và thao tác dải/icon thu nhỏ | [UNIFIED_OVERLAY](UNIFIED_OVERLAY.md) | Thiết kế đã triển khai; lệnh smoke có thể theo build cũ |
-| Quy tắc làm việc và lịch sử các giai đoạn newbie | [PLAN](PLAN.md) | Mục 1–3 vẫn là quy tắc; phần triển khai/lộ trình là hồ sơ |
-| Các bước UI trước khi thêm TTS | [UIUX_REVIEW_PLAN](UIUX_REVIEW_PLAN.md) | Lịch sử đã merge |
-| Kết quả đo/test và quá trình tối ưu TTS trước khi tách | [VNTEXT_TTS_PLAN](VNTEXT_TTS_PLAN.md) | Lịch sử; không dùng đường dẫn/backend cũ để triển khai |
-| Link guide chung từng gửi | [AIVOICE2_CONNECT_VI](AIVOICE2_CONNECT_VI.md) | Chuyển hướng, không giữ bản sao |
+| Bạn cần | Tài liệu hiện hành |
+|---|---|
+| Distro/dependency, Rust/build, cài vào menu | [INSTALL_VI](INSTALL_VI.md) |
+| Dải, dịch, tra từ, OCR, lệnh và game đã hỗ trợ | [USER_GUIDE_VI](USER_GUIDE_VI.md) |
+| URL/giọng, streaming, prepare/lookahead/cache RAM | [TTS_CLIENT_VI](TTS_CLIENT_VI.md) |
+| Sửa source hoặc thêm profile | [DEVELOPMENT_VI](DEVELOPMENT_VI.md) |
+| Hiểu ba repo và ranh giới backend/client | [ARCHITECTURE_VI](ARCHITECTURE_VI.md) |
+| Định dạng engine và backlog shin/Higurashi | [engines](engines.md) |
+| Bố cục/resize/opacity đã triển khai | [UNIFIED_OVERLAY](UNIFIED_OVERLAY.md) |
 
-API, worker, quota WAV, cấu hình runtime, build/release và runbook chung
-chỉ duy trì ở [aivoice2api/docs](https://github.com/aquaplatinumberlitz/aivoice2api/tree/main/docs).
+## Hồ sơ triển khai và link cũ
+
+| Tài liệu | Phạm vi |
+|---|---|
+| [PLAN](PLAN.md) | Mục 1–3 vẫn là quy tắc làm việc; các giai đoạn cũ là hồ sơ |
+| [UIUX_REVIEW_PLAN](UIUX_REVIEW_PLAN.md) | Lịch sử UI đã merge |
+| [VNTEXT_TTS_PLAN](VNTEXT_TTS_PLAN.md) | Benchmark/test/lịch sử trước khi tách backend; không dùng đường dẫn triển khai cũ |
+| [AIVOICE2_CONNECT_VI](AIVOICE2_CONNECT_VI.md) | Chuyển hướng tới guide kỹ thuật chung |
+
+Backend/API/config/WAV quota/build/release chỉ duy trì ở
+[aivoice2api/docs](https://github.com/aquaplatinumberlitz/aivoice2api/tree/main/docs).
 Addon/bộ cài ở [Anki docs](https://github.com/aquaplatinumberlitz/aivoice2-anki/tree/main/docs).
 `integrations/aivoice2/README.md` giữ link cũ; source/test backend đã chuyển.
-
-Giữ mốc đo và giới hạn QA trong tài liệu lịch sử; không đổi số liệu cũ
-thành cam kết bản hiện tại. Các đường dẫn worktree trong plan không phải
-bố trí cài đặt máy khách. Repo chính hiện ở `/mnt/m2sata/A.I.VOICE2-futago/vntext`.
+Đường dẫn worktree trong plan thuộc lịch sử, không là đường dẫn máy khách.

@@ -1,14 +1,13 @@
 # Client TTS vntext
 
-Backend/API chỉ duy trì ở [aivoice2api](https://github.com/aquaplatinumberlitz/aivoice2api).
-Cài runtime và kiểm mẫu WAV theo [CONNECT_VI](https://github.com/aquaplatinumberlitz/aivoice2api/blob/main/docs/CONNECT_VI.md)
-trước khi tìm lỗi overlay/player. Bộ cài Anki 0.3.0 đã kèm backend mới;
-chạy start-setup.sh dùng ngay, không cần compose hoặc cài service riêng
-cho vntext. Anki không cần mở để vntext phát tiếng.
+**Cài từ đầu: [Quickstart chung](https://github.com/aquaplatinumberlitz/aivoice2-anki/blob/main/docs/QUICKSTART_VI.md).**
+Bộ cài Anki đã kèm backend mới; vntext chỉ gọi cùng URL. Nếu chưa build
+client, xem [INSTALL_VI](INSTALL_VI.md). Trang này giải thích cấu hình và
+hành vi TTS khi đã có backend, không yêu cầu build lại engine.
 
 ## Nối backend đã có
 
-1. Mở vntext/game theo README, vào dải → Giọng đọc → Kết nối nâng cao.
+1. Mở vntext/game theo [hướng dẫn sử dụng](USER_GUIDE_VI.md), vào dải → Giọng đọc → Kết nối nâng cao.
 2. Nhập URL đúng bản cài, bấm **Làm mới giọng** để áp dụng và lưu; chọn giọng.
 3. **Nghe thử**, rồi nghe câu Nhật/đoạn chọn từ dải. Mặc định tự đọc tắt.
 4. Anki và vntext phải cùng URL/instance nếu muốn dùng chung runtime.
