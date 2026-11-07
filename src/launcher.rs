@@ -48,7 +48,7 @@ const STYLE: &str = "
 .vntext-launcher button:disabled { opacity: 0.45; }
 .vntext-launcher dropdown button { background: #252f40; border: 1px solid #354155; }
 .vntext-launcher popover contents, .vntext-launcher popover listview { background: #18202d; color: #e6edf7; }
-.vntext-launcher .card { background: #18202d; border: 1px solid #354155; border-radius: 10px; }
+.vntext-launcher .card { background: #18202d; border: 1px solid #354155; border-radius: 10px; padding: 16px; }
 .vntext-launcher .state { color: #e0a458; font-size: 12px; }
 .vntext-launcher switch:checked { background: #e0a458; }
 .vntext-launcher scrollbar slider { min-width: 6px; min-height: 6px; margin: 0; border: none; }
@@ -440,7 +440,7 @@ impl Launcher {
         for check in wrong {
             let block = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
             block.add_css_class("card");
-            margins(&block, 8, 12);
+            margins(&block, 8, 0);
             block.append(&label(check.name, &["heading"]));
             block.append(&label(&check.said, &[]));
             block.append(&label(&check.fix, &["dim-label"]));
@@ -703,7 +703,6 @@ fn build(main: glib::MainLoop, tray: Option<ksni::blocking::Handle<tray::Tray>>,
 
     let options = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
     options.add_css_class("card");
-    margins(&options, 12, 12);
     options.append(&label("Phụ đề và bản dịch", &["heading"]));
     let translate_on = gtk4::Switch::new();
     let language = gtk4::DropDown::from_strings(&LANGUAGES.map(|l| l.1));
@@ -900,13 +899,26 @@ mod tests {
         let monitor = display.monitors().item(0).unwrap().downcast::<gtk4::gdk::Monitor>().unwrap().geometry();
         assert!(window.width() <= monitor.width() && window.height() <= monitor.height());
         assert!(start.is_mapped());
-        let paintable = gtk4::WidgetPaintable::new(Some(&window));
-        let snapshot = gtk4::Snapshot::new();
-        paintable.snapshot(&snapshot, window.width() as f64, window.height() as f64);
-        let node = snapshot.to_node().unwrap();
-        let texture = window.renderer().unwrap().render_texture(&node, None);
         let output = PathBuf::from(std::env::var_os("VNTEXT_UI_OUTPUT").unwrap());
-        texture.save_to_png(output.join("launcher.png")).unwrap();
+        for name in ["launcher", "launcher-options"] {
+            if name == "launcher-options" {
+                // Diagnostics can push the options card below the initial viewport.
+                let body = all.iter().find_map(|w| w.clone().downcast::<gtk4::ScrolledWindow>().ok().filter(|s| s.vexpands())).unwrap();
+                let until = std::time::Instant::now() + Duration::from_millis(150);
+                while std::time::Instant::now() < until {
+                    let scroll = body.vadjustment();
+                    scroll.set_value((scroll.upper() - scroll.page_size()).max(0.0));
+                    while context.pending() { context.iteration(false); }
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+            let paintable = gtk4::WidgetPaintable::new(Some(&window));
+            let snapshot = gtk4::Snapshot::new();
+            paintable.snapshot(&snapshot, window.width() as f64, window.height() as f64);
+            let node = snapshot.to_node().unwrap();
+            let texture = window.renderer().unwrap().render_texture(&node, None);
+            texture.save_to_png(output.join(format!("{name}.png"))).unwrap();
+        }
         window.destroy();
     }
 

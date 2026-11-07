@@ -47,6 +47,8 @@ const INTRO_KEY: &str = "@intro";
 const NARROWEST: i32 = 200;
 /// A manual viewport must leave room for the header and a line of text.
 const SHORTEST: i32 = 140;
+const INSET: i32 = 16;
+const PADDING: i32 = 42;
 /// How much of the text from the pointer on is looked up: the longest word
 /// it starts with is found.
 const LOOKED_UP: usize = 20;
@@ -135,7 +137,7 @@ window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
 .vntext-ask progressbar progress { background: #e0a458; }
 .vntext-ask .box list label { color: #e8e8e8; }
 .vntext-pick label { color: white; font-size: 20px; background: rgba(0, 0, 0, 0.8); padding: 8px 16px; border-radius: 8px; }
-.vntext .strip { border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 10px 14px; }
+.vntext .strip { border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 16px 20px; }
 .vntext .strip .panel-header { opacity: 0.72; transition: opacity 180ms ease; }
 .vntext .strip .panel-header.active { opacity: 1; }
 .vntext .strip .panel-header button, .vntext .strip button.restore { min-height: 22px; min-width: 22px; padding: 5px 7px; border-radius: 7px; background: rgba(255, 255, 255, 0.08); color: #e6edf7; border: none; box-shadow: none; }
@@ -143,6 +145,7 @@ window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
 .vntext .strip .panel-header label, .vntext .strip button.restore label { font-size: 12px; text-shadow: none; }
 .vntext .strip .panel-header label.panel-title { font-size: 13px; font-weight: bold; color: #aeb7c8; }
 .vntext .strip.collapsed { padding: 4px; }
+.vntext .strip button.restore { min-width: 36px; min-height: 36px; padding: 4px; }
 .vntext .strip.editing { border-color: #e0a458; }
 .vntext .strip.editing .panel-header { opacity: 1; }
 .vntext .strip .layout-editor { padding: 5px 0; }
@@ -178,14 +181,24 @@ window.vntext, window.vntext-pick, window.vntext-ask { background: none; }
 .vntext-ask .box label { color: #e6edf7; font-size: 13px; }
 .vntext-ask .box label.heading { font-size: 17px; font-weight: bold; }
 .vntext-ask .box label.caption { color: #aeb7c8; font-size: 12px; }
-.vntext-ask .box button { min-height: 24px; min-width: 24px; padding: 5px 10px; border-radius: 7px; background: #293548; }
+.vntext-ask .box button { min-height: 24px; min-width: 24px; padding: 5px 10px; border-radius: 7px; background: #293548; color: #e6edf7; }
 .vntext-ask .box button label { color: #e6edf7; }
 .vntext-ask .box button:hover { background: #35455c; }
-.vntext-ask .box button.on, .vntext-ask .box button.suggested-action { background: #e0a458; }
+.vntext-ask .box button.on, .vntext-ask .box button.suggested-action { background: #e0a458; color: #171b24; }
 .vntext-ask .box button.on label, .vntext-ask .box button.suggested-action label { color: #171b24; }
 .vntext-ask .box button.swatch { padding: 0; border-radius: 16px; }
 .vntext-ask .box button.swatch.on { border-color: #e0a458; }
 .vntext-ask .box entry { background: #111824; border-color: #3b485d; border-radius: 6px; }
+.vntext-ask .box spinbutton { background: #111824; color: #e6edf7; border: 1px solid #3b485d; border-radius: 7px; box-shadow: none; }
+.vntext-ask .box spinbutton > text { background: none; color: #e6edf7; caret-color: #e6edf7; min-width: 40px; padding: 0 8px; }
+.vntext-ask .box spinbutton > text selection { background: #3b536f; color: white; }
+.vntext-ask .box spinbutton > button { min-width: 35px; min-height: 34px; margin: 0; padding: 0; border-radius: 0; border-left: 1px solid #3b485d; background: #293548; color: #e6edf7; }
+.vntext-ask .box spinbutton > button image { color: #e6edf7; -gtk-icon-size: 16px; }
+.vntext-ask .box spinbutton > button.up { border-radius: 0 6px 6px 0; }
+.vntext-ask .box spinbutton > button:hover { background: #3b4b64; }
+.vntext-ask .box spinbutton > button:active { background: #4b607d; }
+.vntext-ask .box spinbutton > button:disabled { opacity: 0.4; }
+.vntext-ask .box spinbutton:focus-within { border-color: #e0a458; outline: 2px solid #e0a458; outline-offset: -2px; }
 .vntext-ask .box dropdown button { background: #252f40; }
 .vntext-ask .box flowboxchild { padding: 0; }
 ";
@@ -254,13 +267,15 @@ struct Look {
     place: Option<(i32, i32, i32)>,
     /// Total expanded height, or automatic sizing from the message.
     height: Option<i32>,
+    /// Collapsed icon position relative to the game; independent of expanded size.
+    icon: Option<(i32, i32)>,
     hidden: bool,
     copy: bool,
 }
 
 impl Default for Look {
     fn default() -> Look {
-        Look { font: FONT, opacity: OPACITY, colour: COLOUR.to_string(), mode: Mode::Translation, place: None, height: None, hidden: false, copy: false }
+        Look { font: FONT, opacity: OPACITY, colour: COLOUR.to_string(), mode: Mode::Translation, place: None, height: None, icon: None, hidden: false, copy: false }
     }
 }
 
@@ -275,6 +290,7 @@ impl Look {
             mode: Mode::ALL.iter().find(|m| saved["mode"] == m.1).map_or(Mode::Translation, |m| m.0),
             place: place.filter(|p| p.2 >= NARROWEST),
             height: number(&saved["height"]).filter(|h| *h >= SHORTEST),
+            icon: saved["icon"].as_array().and_then(|p| Some((number(p.first()?)?, number(p.get(1)?)?))),
             hidden: saved["hidden"] == true,
             copy: saved["copy"] == true,
         }
@@ -282,7 +298,7 @@ impl Look {
 
     fn to_json(&self) -> Value {
         let mode = Mode::ALL.iter().find(|m| m.0 == self.mode).unwrap().1;
-        json!({"font": self.font, "opacity": self.opacity, "colour": self.colour, "mode": mode, "place": self.place.map(|p| [p.0, p.1, p.2]), "height": self.height, "hidden": self.hidden, "copy": self.copy})
+        json!({"font": self.font, "opacity": self.opacity, "colour": self.colour, "mode": mode, "place": self.place.map(|p| [p.0, p.1, p.2]), "height": self.height, "icon": self.icon.map(|p| [p.0, p.1]), "hidden": self.hidden, "copy": self.copy})
     }
 }
 
@@ -307,7 +323,7 @@ fn strip_style(look: &Look) -> (String, String) {
 fn panel(game: (i32, i32, i32, i32), saved: Option<(i32, i32, i32)>, screen: (i32, i32, i32, i32), minimum: i32, tall: i32) -> (i32, i32, i32) {
     let (x, y, width, height) = game;
     let (left, top, wide, high) = screen;
-    let (px, py, wanted) = saved.map_or((x, y + height + GAP, width), |(dx, dy, w)| (x + dx, y + dy, w));
+    let (px, py, wanted) = saved.map_or((x + INSET, y + height + GAP, width - INSET * 2), |(dx, dy, w)| (x + dx, y + dy, w));
     let width = wanted.max(minimum).min(wide.max(1));
     let py = if saved.is_none() && py + tall > top + high { y + height - tall - GAP } else { py };
     (px.clamp(left, left + wide - width), py.clamp(top, top + (high - tall).max(0)), width)
@@ -571,6 +587,8 @@ struct Ui {
     away: u32,
     history_open: bool,
     expanded_height: i32,
+    chrome_height: i32,
+    icon_at: (i32, i32),
 }
 
 struct Overlay {
@@ -591,12 +609,15 @@ struct Overlay {
     sizes: gtk4::CssProvider,
     look: gtk4::CssProvider,
     strip: gtk4::Window,
+    stage: gtk4::Fixed,
+    frame: gtk4::Overlay,
     content: gtk4::Box,
     /// the name of who speaks, set apart from what is said
     speaker: gtk4::Label,
     japanese: gtk4::Label,
     translation: gtk4::Label,
     text_scroll: gtk4::ScrolledWindow,
+    passage: gtk4::Box,
     /// says in small letters where the message comes from
     source: gtk4::Label,
     /// says who translates, and lets another be chosen
@@ -632,6 +653,7 @@ struct Overlay {
     header: gtk4::Box,
     body: gtk4::Box,
     restore: gtk4::Button,
+    icon_moved: Cell<bool>,
     history_summary: gtk4::Button,
     history_controls: gtk4::Box,
     empty: gtk4::Label,
@@ -1126,29 +1148,62 @@ impl Overlay {
             self.strip.set_monitor(monitor);
             self.popup.set_monitor(monitor);
         }
-        let fixed = ui.look.height.is_some() && !ui.look.hidden;
-        self.text_scroll.set_max_content_height(-1);
-        self.text_scroll.set_min_content_height(if fixed { 48 } else { -1 });
-        self.text_scroll.set_max_content_height(if fixed { -1 } else { (height / 3).clamp(100, 360) });
-        self.text_scroll.set_propagate_natural_height(!fixed);
-        self.text_scroll.set_vexpand(fixed);
-        self.body.set_vexpand(fixed);
         let minimum = if ui.look.hidden { ui.strip.2.max(NARROWEST) } else {
-            (self.header.measure(gtk4::Orientation::Horizontal, -1).0.max(self.editor.measure(gtk4::Orientation::Horizontal, -1).0) + 30).max(NARROWEST)
+            (self.header.measure(gtk4::Orientation::Horizontal, -1).0.max(self.editor.measure(gtk4::Orientation::Horizontal, -1).0) + PADDING).max(NARROWEST)
         };
         let screen = (bounds.x(), bounds.y(), bounds.width(), bounds.height());
         let wide = panel((x, y, width, height), ui.look.place, screen, minimum, ui.expanded_height).2;
         self.content.set_size_request(if ui.look.hidden { -1 } else { wide }, -1);
         if !ui.look.hidden {
-            let (minimum, natural, _, _) = self.content.measure(gtk4::Orientation::Vertical, wide);
-            ui.expanded_height = ui.look.height.map_or(natural, |h| h.max(SHORTEST).max(minimum)).min(bounds.height());
-            self.content.set_size_request(wide, if fixed { ui.expanded_height } else { -1 });
+            let has_text = !ui.intro && !ui.shown.messages.is_empty();
+            self.text_scroll.set_visible(has_text);
+            // Measure chrome separately, then reserve the actual wrapped passage height.
+            // GtkFixed measures unconstrained children; relying on its natural height
+            // lets the scroller shrink to a sliver even when there is room for the text.
+            self.text_scroll.set_max_content_height(-1);
+            self.text_scroll.set_min_content_height(0);
+            self.text_scroll.set_propagate_natural_height(false);
+            self.text_scroll.set_vexpand(false);
+            self.body.set_vexpand(false);
+            ui.chrome_height = self.content.measure(gtk4::Orientation::Vertical, wide).1
+                - self.text_scroll.measure(gtk4::Orientation::Vertical, (wide - PADDING).max(1)).1;
+            let available = (bounds.height() - ui.chrome_height).max(1);
+            let viewport = if !has_text { 0 } else if let Some(tall) = ui.look.height {
+                (tall - ui.chrome_height).max(48).min(available)
+            } else {
+                let wrapped = self.passage.measure(gtk4::Orientation::Vertical, (wide - PADDING).max(1)).1;
+                let line = self.japanese.create_pango_layout(Some("あ")).pixel_size().1;
+                let comfortable = line * if ui.look.mode == Mode::Both { 4 } else { 2 } + 12;
+                let cap = (bounds.height() * 2 / 5).min(360).min(available);
+                wrapped.max(comfortable).min(cap)
+            };
+            self.text_scroll.set_min_content_height(viewport);
+            self.text_scroll.set_max_content_height(viewport);
+            let natural = self.content.measure(gtk4::Orientation::Vertical, wide).1;
+            ui.expanded_height = natural.min(bounds.height());
+            self.content.set_size_request(wide, ui.expanded_height);
         }
         let strip = panel((x, y, width, height), ui.look.place, screen, minimum, ui.expanded_height);
+        if ui.look.hidden {
+            let wanted = ui.look.icon.map(|(dx, dy)| (x + dx, y + dy))
+                .unwrap_or(if ui.strip.2 == 0 { (strip.0, strip.1) } else { ui.icon_at });
+            let w = self.content.measure(gtk4::Orientation::Horizontal, -1).1;
+            let h = self.content.measure(gtk4::Orientation::Vertical, w).1;
+            ui.icon_at = (wanted.0.clamp(bounds.x(), bounds.x() + (bounds.width() - w).max(0)),
+                          wanted.1.clamp(bounds.y(), bounds.y() + (bounds.height() - h).max(0)));
+        }
         ui.strip = strip;
-        self.strip.set_default_size(if ui.look.hidden { 1 } else { strip.2 }, if ui.look.hidden { 1 } else { ui.expanded_height });
-        self.strip.set_margin(Edge::Left, strip.0 - bounds.x());
-        self.strip.set_margin(Edge::Top, strip.1 - bounds.y());
+        // Editing and the collapsed icon use stationary native coordinates.
+        // Only the child moves; input outside the visible child passes through.
+        let stationary = !ui.locked || ui.look.hidden;
+        let at = if ui.look.hidden { ui.icon_at } else { (strip.0, strip.1) };
+        self.strip.set_anchor(Edge::Right, stationary);
+        self.strip.set_anchor(Edge::Bottom, stationary);
+        self.stage.set_size_request(if stationary { bounds.width() } else { -1 }, if stationary { bounds.height() } else { -1 });
+        self.stage.move_(&self.frame, if stationary { (at.0 - bounds.x()) as f64 } else { 0.0 }, if stationary { (at.1 - bounds.y()) as f64 } else { 0.0 });
+        self.strip.set_default_size(if stationary { bounds.width() } else { strip.2 }, if stationary { bounds.height() } else { ui.expanded_height });
+        self.strip.set_margin(Edge::Left, if stationary { 0 } else { at.0 - bounds.x() });
+        self.strip.set_margin(Edge::Top, if stationary { 0 } else { at.1 - bounds.y() });
         let (japanese, _, _) = ui.shown.texts(ui.look.mode);
         self.strip.set_visible(true);
         if let Some(surface) = self.strip.surface() {
@@ -1159,8 +1214,13 @@ impl Overlay {
 
     /// Translation-only leaves the game clickable while all controls still work.
     fn input(&self, through: bool) -> cairo::Region {
+        if self.restore.is_visible() {
+            let b = self.restore.compute_bounds(&self.strip).unwrap();
+            return cairo::Region::create_rectangle(&cairo::RectangleInt::new(b.x().floor() as i32, b.y().floor() as i32, b.width().ceil() as i32, b.height().ceil() as i32));
+        }
         if !through {
-            return cairo::Region::create_rectangle(&cairo::RectangleInt::new(0, 0, self.strip.width(), self.strip.height()));
+            let b = self.frame.compute_bounds(&self.strip).unwrap();
+            return cairo::Region::create_rectangle(&cairo::RectangleInt::new(b.x().floor() as i32, b.y().floor() as i32, b.width().ceil() as i32, b.height().ceil() as i32));
         }
         let taking = cairo::Region::create();
         let widgets: [&gtk4::Widget; 10] = [self.header.upcast_ref(), self.restore.upcast_ref(), self.history_summary.upcast_ref(), self.service.upcast_ref(), self.hint.upcast_ref(), self.dismiss.upcast_ref(), self.previous.upcast_ref(), self.next.upcast_ref(), self.latest.upcast_ref(), self.listen.upcast_ref()];
@@ -1314,7 +1374,7 @@ impl Overlay {
         // under the word, or above the strip when there is no room below
         let tall = (self.meaning.measure(gtk4::Orientation::Vertical, MEANING).1 + 20).min(TALLEST);
         let bounds = self.strip.monitor().map(|m| m.geometry()).unwrap_or_else(|| gdk::Rectangle::new(0, 0, 1920, 1080));
-        let below = ui.strip.1 + self.strip.height() + 2;
+        let below = ui.strip.1 + self.frame.height() + 2;
         let top = if below + tall <= bounds.y() + bounds.height() { below } else { ui.strip.1 - tall - 2 };
         // the least may never be above the most, so the most is let go of first
         self.scrolled.set_max_content_height(-1);
@@ -1459,6 +1519,9 @@ impl Overlay {
             page.append(&row);
         };
         let font = gtk4::SpinButton::with_range(*FONTS.start() as f64, *FONTS.end() as f64, 1.0);
+        font.set_numeric(true);
+        font.set_width_chars(3);
+        font.set_alignment(0.5);
         font.set_value(look.font as f64);
         let overlay = self.clone();
         font.connect_value_changed(move |font| overlay.restyle(|l| l.font = font.value() as i32));
@@ -1714,40 +1777,46 @@ impl Overlay {
         if !enabled { self.save(); }
     }
 
-    /// Read pointer movement in screen coordinates: the dragged widget moves too.
+    /// Raw event positions use the stationary native surface, never the moving grip.
     fn dragging(self: &Rc<Self>, grip: &gtk4::Widget, edges: (i32, i32)) {
         let drag = gtk4::GestureDrag::new();
         drag.set_button(gdk::BUTTON_PRIMARY);
         let origin = Rc::new(Cell::new(None));
         let (overlay, widget, begun) = (self.clone(), grip.clone(), origin.clone());
         drag.connect_drag_begin(move |gesture, x, y| {
+            begun.set(None);
             let ui = overlay.ui.borrow();
             if ui.locked || ui.look.hidden {
                 gesture.set_state(gtk4::EventSequenceState::Denied);
                 return;
             }
-            let Some(p) = widget.compute_point(&overlay.strip, &gtk4::graphene::Point::new(x as f32, y as f32)) else { return };
-            begun.set(Some(((ui.strip.0 as f64 + p.x() as f64, ui.strip.1 as f64 + p.y() as f64),
-                            (ui.strip.0, ui.strip.1, overlay.strip.width(), overlay.strip.height()), (x, y))));
+            let pointer = gesture.current_event().and_then(|e| e.position()).or_else(|| {
+                widget.compute_point(&overlay.strip, &gtk4::graphene::Point::new(x as f32, y as f32)).map(|p| (p.x() as f64, p.y() as f64))
+            });
+            let Some(pointer) = pointer else { return };
+            begun.set(Some((pointer, (ui.strip.0, ui.strip.1, overlay.frame.width(), overlay.frame.height()), (x, y), false)));
         });
         let (overlay, widget, begun) = (self.clone(), grip.clone(), origin.clone());
         drag.connect_drag_update(move |gesture, dx, dy| {
-            let Some((pointer, rect, local)) = begun.get() else { return };
+            let Some((pointer, rect, local, started)) = begun.get() else { return };
             let mut ui = overlay.ui.borrow_mut();
             if ui.locked { return; }
             let Some((gx, gy, _, _)) = ui.placed else { return };
-            let (px, py) = gesture.point(None).unwrap_or((local.0 + dx, local.1 + dy));
-            let Some(p) = widget.compute_point(&overlay.strip, &gtk4::graphene::Point::new(px as f32, py as f32)) else { return };
-            let delta = ((ui.strip.0 as f64 + p.x() as f64 - pointer.0).round() as i32,
-                         (ui.strip.1 as f64 + p.y() as f64 - pointer.1).round() as i32);
+            let point = gesture.current_event().and_then(|e| e.position()).or_else(|| {
+                widget.compute_point(&overlay.strip, &gtk4::graphene::Point::new((local.0 + dx) as f32, (local.1 + dy) as f32)).map(|p| (p.x() as f64, p.y() as f64))
+            });
+            let Some(point) = point else { return };
+            let delta = ((point.0 - pointer.0).round() as i32, (point.1 - pointer.1).round() as i32);
+            if !started && delta.0.abs().max(delta.1.abs()) < 4 { return; }
+            begun.set(Some((pointer, rect, local, true)));
             if edges == (0, 0) {
                 ui.look.place = Some((rect.0 + delta.0 - gx, rect.1 + delta.1 - gy, rect.2));
             } else {
                 let bounds = overlay.strip.monitor().unwrap().geometry();
                 // The requested size is the current rectangle, not a minimum for resizing.
                 overlay.content.set_size_request(-1, -1);
-                let minimum = (overlay.header.measure(gtk4::Orientation::Horizontal, -1).0.max(overlay.editor.measure(gtk4::Orientation::Horizontal, -1).0) + 30,
-                               overlay.content.measure(gtk4::Orientation::Vertical, rect.2).0 + if ui.look.height.is_none() { 48 } else { 0 });
+                let minimum = (overlay.header.measure(gtk4::Orientation::Horizontal, -1).0.max(overlay.editor.measure(gtk4::Orientation::Horizontal, -1).0) + PADDING,
+                               ui.chrome_height + 48);
                 let next = resized(rect, delta, edges, (minimum.0.max(NARROWEST), minimum.1.max(SHORTEST)),
                                    (bounds.x(), bounds.y(), bounds.width(), bounds.height()));
                 ui.look.place = Some((next.0 - gx, next.1 - gy, next.2));
@@ -1758,9 +1827,57 @@ impl Overlay {
             overlay.place();
         });
         let (overlay, begun) = (self.clone(), origin.clone());
-        drag.connect_drag_end(move |_, _, _| { if begun.take().is_some() { overlay.save(); } });
+        drag.connect_drag_end(move |_, _, _| { if begun.take().is_some_and(|(_, _, _, moved)| moved) { overlay.save(); } });
         drag.connect_cancel(move |_, _| origin.set(None));
         grip.add_controller(drag);
+    }
+
+    /// The collapsed icon moves independently; claiming a drag cancels the button click.
+    fn icon_drag(self: &Rc<Self>) {
+        let drag = gtk4::GestureDrag::new();
+        drag.set_button(gdk::BUTTON_PRIMARY);
+        drag.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        let origin = Rc::new(Cell::new(None));
+        let (overlay, begun) = (self.clone(), origin.clone());
+        drag.connect_drag_begin(move |gesture, x, y| {
+            begun.set(None);
+            overlay.icon_moved.set(false);
+            if !overlay.ui.borrow().look.hidden {
+                gesture.set_state(gtk4::EventSequenceState::Denied);
+                return;
+            }
+            let p = gesture.current_event().and_then(|e| e.position()).or_else(|| {
+                overlay.restore.compute_point(&overlay.strip, &gtk4::graphene::Point::new(x as f32, y as f32)).map(|p| (p.x() as f64, p.y() as f64))
+            });
+            if let Some(p) = p { begun.set(Some((p, overlay.ui.borrow().icon_at, (x, y)))); }
+        });
+        let (overlay, begun) = (self.clone(), origin.clone());
+        drag.connect_drag_update(move |gesture, dx, dy| {
+            let Some((pointer, at, local)) = begun.get() else { return };
+            let p = gesture.current_event().and_then(|e| e.position()).or_else(|| {
+                overlay.restore.compute_point(&overlay.strip, &gtk4::graphene::Point::new((local.0 + dx) as f32, (local.1 + dy) as f32)).map(|p| (p.x() as f64, p.y() as f64))
+            });
+            let Some(p) = p else { return };
+            let delta = ((p.0 - pointer.0).round() as i32, (p.1 - pointer.1).round() as i32);
+            if !overlay.icon_moved.get() && delta.0.abs().max(delta.1.abs()) < 4 { return; }
+            overlay.icon_moved.set(true);
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+            let mut ui = overlay.ui.borrow_mut();
+            if !ui.look.hidden { return; }
+            let Some((gx, gy, _, _)) = ui.placed else { return };
+            let bounds = overlay.strip.monitor().unwrap().geometry();
+            let x = (at.0 + delta.0).clamp(bounds.x(), bounds.x() + (bounds.width() - overlay.frame.width()).max(0));
+            let y = (at.1 + delta.1).clamp(bounds.y(), bounds.y() + (bounds.height() - overlay.frame.height()).max(0));
+            ui.look.icon = Some((x - gx, y - gy));
+            drop(ui);
+            overlay.place();
+        });
+        let (overlay, begun) = (self.clone(), origin.clone());
+        drag.connect_drag_end(move |_, _, _| {
+            if begun.take().is_some() && overlay.icon_moved.get() { overlay.save(); }
+        });
+        drag.connect_cancel(move |_, _| origin.set(None));
+        self.restore.add_controller(drag);
     }
 
     /// A button of the bar that changes the state and shows it anew.
@@ -2227,9 +2344,17 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     motion.connect_leave(move |_| left.remove_css_class("active"));
     content.add_controller(motion);
     let body = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
-    let restore = gtk4::Button::with_label("vntext · Hiện");
+    let restore = gtk4::Button::new();
+    // Reuse the tray's embedded artwork without depending on an installed icon theme.
+    let pixels = glib::Bytes::from_static(include_bytes!("vntext-64.rgba"));
+    let texture = gdk::MemoryTexture::new(64, 64, gdk::MemoryFormat::R8g8b8a8, &pixels, 64 * 4);
+    let icon = gtk4::Image::from_paintable(Some(&texture));
+    icon.set_pixel_size(32);
+    restore.set_child(Some(&icon));
+    restore.update_property(&[gtk4::accessible::Property::Label("vntext — Hiện phụ đề")]);
     restore.add_css_class("restore");
-    restore.set_tooltip_text(Some("Hiện lại phụ đề và thanh công cụ tại đây"));
+    restore.set_tooltip_text(Some("vntext — Bấm để hiện phụ đề; giữ và kéo để di chuyển"));
+    restore.set_cursor_from_name(Some("grab"));
     restore.set_focusable(false);
     let text = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
     text.set_hexpand(true);
@@ -2240,7 +2365,7 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     let (speaker, japanese, translation) = (label("speaker"), label("japanese"), label("translation"));
     let passage = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
     passage.append(&speaker);
-    let lines = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
+    let lines = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
     lines.set_hexpand(true);
     lines.append(&japanese);
     lines.append(&translation);
@@ -2382,7 +2507,9 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
         frame.add_overlay(&handle);
         handles.push(((horizontal, vertical), handle));
     }
-    strip.set_child(Some(&frame));
+    let stage = gtk4::Fixed::new();
+    stage.put(&frame, 0.0, 0.0);
+    strip.set_child(Some(&stage));
 
     // the meaning of a word: Yomitan's entries, one under the other, scrolled when long
     let popup = floating("vntext");
@@ -2421,7 +2548,7 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
 
     let game = mem::name(pid);
     let look = saved_looks().get(&game).map(Look::from_json).unwrap_or_default();
-    let ui = Ui { shown: Shown::default(), look, locked: true, game: None, placed: None, strip: (0, 0, 0), picking: false, reading, intro: !intro_read(&saved_looks()), selection: None, copied: None, hover: None, asked: None, lookups: 0, over_meaning: false, away: 0, history_open: false, expanded_height: 160 };
+    let ui = Ui { shown: Shown::default(), look, locked: true, game: None, placed: None, strip: (0, 0, 0), picking: false, reading, intro: !intro_read(&saved_looks()), selection: None, copied: None, hover: None, asked: None, lookups: 0, over_meaning: false, away: 0, history_open: false, expanded_height: 160, chrome_height: 0, icon_at: (0, 0) };
     let overlay = Rc::new(Overlay {
         ui: RefCell::new(ui),
         events,
@@ -2435,11 +2562,14 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
         sizes,
         look: look_style,
         strip,
+        stage,
+        frame,
         content,
         speaker,
         japanese,
         translation,
         text_scroll,
+        passage,
         source,
         service,
         intro,
@@ -2470,6 +2600,7 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
         header,
         body,
         restore,
+        icon_moved: Cell::new(false),
         history_summary,
         history_controls,
         empty,
@@ -2485,6 +2616,7 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     overlay.acting(&overlay.hide, |o| {
         let mut ui = o.ui.borrow_mut();
         ui.locked = true;
+        ui.icon_at = (ui.strip.0, ui.strip.1);
         ui.look.hidden = !ui.look.hidden;
         drop(ui);
         o.save();
@@ -2516,7 +2648,14 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     overlay.header.append(&overlay.button("emblem-system-symbolic", "Thiết lập: hiển thị, dịch, từ điển, OCR", |o| o.set_up(Tab::Display)));
     overlay.header.append(&overlay.hide);
     overlay.acting(&overlay.restore, |o| {
-        o.ui.borrow_mut().look.hidden = false;
+        if o.icon_moved.replace(false) { return; }
+        let mut ui = o.ui.borrow_mut();
+        if let Some((dx, dy)) = ui.look.icon {
+            let width = ui.look.place.map_or(ui.strip.2, |p| p.2);
+            ui.look.place = Some((dx, dy, width));
+        }
+        ui.look.hidden = false;
+        drop(ui);
         o.save();
     });
     overlay.acting(&overlay.history_summary, |o| o.ui.borrow_mut().history_open = true);
@@ -2553,6 +2692,7 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     });
 
     overlay.dragging(overlay.move_area.upcast_ref(), (0, 0));
+    overlay.icon_drag();
     for (edges, handle) in &overlay.handles { overlay.dragging(handle.upcast_ref(), *edges); }
     let editing = overlay.clone();
     overlay.done.connect_clicked(move |_| editing.editing(false));
@@ -2563,13 +2703,14 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     let sizing = overlay.clone();
     overlay.automatic.connect_toggled(move |automatic| {
         if sizing.layout_sync.get() { return; }
-        let height = sizing.strip.height().max(SHORTEST);
+        let height = sizing.frame.height().max(SHORTEST);
         sizing.restyle(|look| look.height = if automatic.is_active() { None } else { Some(height) });
     });
     overlay.acting(&overlay.reset, |o| {
         let mut ui = o.ui.borrow_mut();
         ui.look.place = None;
         ui.look.height = None;
+        ui.look.icon = None;
         ui.look.opacity = OPACITY;
         drop(ui);
         o.save();
@@ -2577,8 +2718,8 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
     // the pointer on the meaning keeps it open, to be read and scrolled
     let on_meaning = gtk4::EventControllerMotion::new();
     let (entered, left) = (overlay.clone(), overlay.clone());
-    on_meaning.connect_enter(move |_, _, _| entered.ui.borrow_mut().over_meaning = true);
-    on_meaning.connect_leave(move |_| left.ui.borrow_mut().over_meaning = false);
+    on_meaning.connect_enter(move |_, _, _| { if let Ok(mut ui) = entered.ui.try_borrow_mut() { ui.over_meaning = true; } });
+    on_meaning.connect_leave(move |_| { if let Ok(mut ui) = left.ui.try_borrow_mut() { ui.over_meaning = false; } });
     overlay.popup.add_controller(on_meaning);
     // the right button on the message opens a menu of what can be done with
     // it, before the label can open its own
@@ -2599,11 +2740,12 @@ fn build(screen: Box<dyn Screen>, events: Receiver<String>, hub: web::Hub, pid: 
         let (left, top) = label.layout_offsets();
         let scale = gtk4::pango::SCALE as f64;
         let (inside, index, _) = label.layout().xy_to_index(((x - left as f64) * scale) as i32, ((y - top as f64) * scale) as i32);
-        let in_strip = label.compute_point(&over.strip, &gtk4::graphene::Point::new(x as f32, y as f32)).map_or(0, |p| p.x() as i32);
-        over.ui.borrow_mut().hover = inside.then_some((index as usize, in_strip));
+        let in_strip = label.compute_point(&over.frame, &gtk4::graphene::Point::new(x as f32, y as f32)).map_or(0, |p| p.x() as i32);
+        if let Ok(mut ui) = over.ui.try_borrow_mut() { ui.hover = inside.then_some((index as usize, in_strip)); }
     });
     let left = overlay.clone();
-    pointer.connect_leave(move |_| left.ui.borrow_mut().hover = None);
+    // Hiding the text during render can synchronously emit leave while Ui is borrowed.
+    pointer.connect_leave(move |_| { if let Ok(mut ui) = left.ui.try_borrow_mut() { ui.hover = None; } });
     overlay.japanese.add_controller(pointer);
     // Long passages scroll separately; history only changes over its controls.
     let wheel = gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::VERTICAL);
@@ -2674,8 +2816,7 @@ mod tests {
                 .find_map(|c| c.downcast::<gtk4::GestureDrag>().ok()).unwrap();
             let origin = || {
                 let p = widget.compute_point(&overlay.strip, &gtk4::graphene::Point::new(0.0, 0.0)).unwrap();
-                let ui = overlay.ui.borrow();
-                (ui.strip.0 as f64 + p.x() as f64, ui.strip.1 as f64 + p.y() as f64)
+                (p.x() as f64, p.y() as f64)
             };
             let start = origin();
             gesture.emit_by_name::<()>("drag-begin", &[&4.0f64, &4.0f64]);
@@ -2684,6 +2825,17 @@ mod tests {
             let moved = origin();
             let offset = (dx - (moved.0 - start.0), dy - (moved.1 - start.1));
             gesture.emit_by_name::<()>("drag-update", &[&offset.0, &offset.1]);
+            pump();
+            let resting = overlay.ui.borrow().look.clone();
+            // Repeated updates while held at the same surface point must not drift.
+            for _ in 0..3 {
+                let moved = origin();
+                let offset = (dx - (moved.0 - start.0), dy - (moved.1 - start.1));
+                gesture.emit_by_name::<()>("drag-update", &[&offset.0, &offset.1]);
+                overlay.place();
+                pump();
+                assert_eq!(overlay.ui.borrow().look, resting);
+            }
             gesture.emit_by_name::<()>("drag-end", &[&offset.0, &offset.1]);
             pump();
             overlay.place();
@@ -2737,9 +2889,30 @@ mod tests {
         overlay.hide.emit_clicked();
         capture(&overlay.strip, "collapsed");
         assert!(overlay.strip.is_mapped() && overlay.restore.is_mapped());
+        assert!(overlay.restore.child().unwrap().is::<gtk4::Image>());
+        assert!(overlay.restore.label().is_none());
         assert!(!overlay.header.is_mapped() && !overlay.body.is_mapped());
         assert_eq!(overlay.ui.borrow().strip, expanded);
-        assert!(overlay.strip.width() < expanded.2);
+        assert!(overlay.frame.width() < expanded.2);
+        if let Some(helper) = std::env::var_os("VNTEXT_UI_POINTER") {
+            overlay.place();
+            pump();
+            // Optional real protocol input, restricted by the helper to the private compositor.
+            let at = overlay.ui.borrow().icon_at;
+            let mut pointer = Command::new(helper).args([(at.0 + 24).to_string(), (at.1 + 24).to_string(), "60".to_string(), "40".to_string()]).spawn().unwrap();
+            let until = Instant::now() + Duration::from_secs(5);
+            loop {
+                pump();
+                if let Some(status) = pointer.try_wait().unwrap() { assert!(status.success()); break; }
+                if Instant::now() >= until { pointer.kill().unwrap(); pointer.wait().unwrap(); panic!("Private pointer helper timed out"); }
+            }
+            assert!(overlay.ui.borrow().look.hidden, "A real pointer drag must not activate restore");
+            assert_eq!(overlay.ui.borrow().icon_at, (at.0 + 60, at.1 + 40), "The button must let its drag gesture move the icon");
+            overlay.ui.borrow_mut().look.icon = None;
+            overlay.ui.borrow_mut().icon_at = at;
+            overlay.icon_moved.set(false);
+            overlay.place();
+        }
         overlay.restore.emit_clicked();
         pump();
         overlay.place();
@@ -2817,6 +2990,12 @@ mod tests {
         pump();
         assert!(!overlay.ui.borrow().locked);
         assert!(overlay.editor.is_mapped() && overlay.handles.iter().all(|(_, h)| h.is_mapped()));
+        // A press and tiny pointer jitter must not start moving the panel.
+        let stationary = overlay.ui.borrow().look.clone();
+        drag(&overlay, overlay.move_area.upcast_ref(), 0.0, 0.0);
+        assert_eq!(overlay.ui.borrow().look, stationary);
+        drag(&overlay, overlay.move_area.upcast_ref(), 1.0, 1.0);
+        assert_eq!(overlay.ui.borrow().look, stationary);
         overlay.japanese.select_region(0, 2);
         let selection = overlay.japanese.selection_bounds();
         overlay.opacity.set_value(0.33);
@@ -2830,26 +3009,30 @@ mod tests {
         drag(&overlay, corner.upcast_ref(), 80.0, 60.0);
         assert_eq!(overlay.ui.borrow().look.place, Some((0, 0, 680)));
         assert_eq!(overlay.ui.borrow().look.height, Some(380));
-        assert_eq!(overlay.strip.height(), 380);
+        assert_eq!(overlay.frame.height(), 380);
         let corner = &overlay.handles.iter().find(|(edges, _)| *edges == (-1, -1)).unwrap().1;
         drag(&overlay, corner.upcast_ref(), -10.0, -10.0);
         assert_eq!(overlay.ui.borrow().look.place, Some((-10, -10, 690)));
         assert_eq!(overlay.ui.borrow().look.height, Some(390));
         drag(&overlay, overlay.move_area.upcast_ref(), 20.0, 25.0);
         assert_eq!(overlay.ui.borrow().look.place, Some((10, 15, 690)));
-        assert_eq!(overlay.strip.height(), 390);
+        assert_eq!(overlay.frame.height(), 390);
+        let panel = overlay.frame.compute_bounds(&overlay.strip).unwrap();
+        let input = overlay.input(false);
+        assert!(input.contains_point((panel.x() + 20.0) as i32, (panel.y() + 20.0) as i32));
+        assert!(!input.contains_point(overlay.strip.width() - 1, overlay.strip.height() - 1), "Editing must leave the game clickable outside the panel");
         capture(&overlay.strip, "layout-editor");
         let long = "今日はいい天気ですね。一緒に散歩しましょう。".repeat(30);
         hub.publish(json!({"type": "message", "seq": 4, "lines": [long]}).to_string());
         overlay.tick();
         pump();
-        assert_eq!(overlay.strip.height(), 390);
+        assert_eq!(overlay.frame.height(), 390);
         let scroll = overlay.text_scroll.vadjustment();
         assert!(scroll.upper() > scroll.page_size());
         assert!(overlay.header.is_mapped() && overlay.done.is_mapped());
         overlay.done.emit_clicked();
         pump();
-        assert_eq!(overlay.strip.height(), 390);
+        assert_eq!(overlay.frame.height(), 390);
         assert!(!overlay.editor.is_mapped());
         assert_eq!(Look::from_json(&saved_looks()[&overlay.game]).height, Some(390));
         overlay.hide.emit_clicked();
@@ -2858,7 +3041,7 @@ mod tests {
         assert!(overlay.restore.is_mapped());
         overlay.restore.emit_clicked();
         pump();
-        assert_eq!(overlay.strip.height(), 390);
+        assert_eq!(overlay.frame.height(), 390);
         overlay.editing(true);
         pump();
         overlay.automatic.set_active(true);
@@ -2879,6 +3062,64 @@ mod tests {
         let look = overlay.ui.borrow().look.clone();
         drag(&overlay, overlay.move_area.upcast_ref(), 30.0, 30.0);
         assert_eq!(overlay.ui.borrow().look, look);
+        // Wrapped dialogue and an error banner must not squeeze the viewport.
+        hub.publish(json!({"type": "message", "seq": 5, "lines": ["今日はいい天気ですね。", "一緒に散歩しましょう。"]}).to_string());
+        hub.publish(json!({"type": "translation", "seq": 5, "tr": "Hôm nay trời đẹp nhỉ.\nCùng đi dạo nhé."}).to_string());
+        hub.publish(json!({"type": "notice", "text": "Có lỗi: HTTP 502"}).to_string());
+        overlay.tick();
+        pump();
+        overlay.place();
+        pump();
+        let viewport = overlay.text_scroll.vadjustment();
+        assert!(viewport.page_size() >= 100.0);
+        assert!(viewport.upper() <= viewport.page_size() + 1.0, "Short Japanese and Vietnamese must both fit without clipping");
+        for text in [&overlay.japanese, &overlay.translation] {
+            let b = text.compute_bounds(&overlay.passage).unwrap();
+            assert!(b.y() >= 0.0 && b.y() + b.height() <= viewport.page_size() as f32 + 1.0);
+        }
+        capture(&overlay.strip, "readable-error");
+        overlay.restyle(|look| { look.place = Some((0, 0, 600)); look.height = Some(320); });
+        pump();
+        overlay.place();
+        let expanded = overlay.ui.borrow().look.clone();
+        overlay.hide.emit_clicked();
+        pump();
+        let still = overlay.ui.borrow().icon_at;
+        drag(&overlay, overlay.restore.upcast_ref(), 0.0, 0.0);
+        assert_eq!(overlay.ui.borrow().icon_at, still);
+        drag(&overlay, overlay.restore.upcast_ref(), 100.0, 80.0);
+        assert!(overlay.ui.borrow().look.hidden);
+        assert_eq!(overlay.ui.borrow().icon_at, (still.0 + 100, still.1 + 80));
+        assert_eq!(overlay.ui.borrow().look.place, expanded.place);
+        assert_eq!(overlay.ui.borrow().look.height, expanded.height);
+        assert_eq!(Look::from_json(&saved_looks()[&overlay.game]).icon, Some((100, 80)));
+        capture(&overlay.strip, "moved-icon");
+        let input = overlay.input(false);
+        assert!(!input.contains_point(0, 0));
+        // A click generated at the end of a drag must be ignored.
+        overlay.restore.emit_clicked();
+        assert!(overlay.ui.borrow().look.hidden);
+        // An ordinary click still restores next to the icon, with the old size.
+        overlay.restore.emit_clicked();
+        pump();
+        overlay.place();
+        assert!(!overlay.ui.borrow().look.hidden);
+        assert_eq!(overlay.ui.borrow().look.place, Some((100, 80, 600)));
+        assert_eq!(overlay.frame.height(), 320);
+        // Saved icon position is reused and clamped by its own compact footprint.
+        overlay.hide.emit_clicked();
+        pump();
+        drag(&overlay, overlay.restore.upcast_ref(), 10000.0, 10000.0);
+        let at = overlay.ui.borrow().icon_at;
+        let bounds = overlay.strip.monitor().unwrap().geometry();
+        assert_eq!(at.0 + overlay.frame.width(), bounds.x() + bounds.width());
+        assert_eq!(at.1 + overlay.frame.height(), bounds.y() + bounds.height());
+        overlay.icon_moved.set(false);
+        overlay.restore.emit_clicked();
+        pump();
+        overlay.place();
+        assert_eq!(overlay.ui.borrow().strip.0 + overlay.ui.borrow().strip.2, bounds.x() + bounds.width());
+        assert!(overlay.ui.borrow().strip.1 + overlay.frame.height() <= bounds.y() + bounds.height());
         overlay.text_menu(4.0, 4.0);
         pump();
         assert!(descendants(overlay.japanese.upcast_ref()).into_iter()
@@ -2891,11 +3132,11 @@ mod tests {
     #[test]
     fn panel_stays_within_its_monitor() {
         let screen = (0, 0, 1024, 768);
-        assert_eq!(panel((40, 24, 680, 370), None, screen, 320, 150), (40, 400, 680));
-        assert_eq!(panel((0, 0, 1024, 768), None, screen, 320, 150), (0, 612, 1024));
+        assert_eq!(panel((40, 24, 680, 370), None, screen, 320, 150), (56, 400, 648));
+        assert_eq!(panel((0, 0, 1024, 768), None, screen, 320, 150), (16, 612, 992));
         assert_eq!(panel((900, 650, 680, 370), Some((200, 100, 680)), screen, 320, 150), (344, 618, 680));
         assert_eq!(panel((40, 24, 680, 370), Some((0, 0, 200)), screen, 320, 150), (40, 24, 320));
-        assert_eq!(panel((-1920, 0, 1920, 1080), None, (-1920, 0, 1920, 1080), 320, 150), (-1920, 924, 1920));
+        assert_eq!(panel((-1920, 0, 1920, 1080), None, (-1920, 0, 1920, 1080), 320, 150), (-1904, 924, 1888));
         assert_eq!(panel((0, 0, 800, 600), None, (0, 0, 280, 240), 320, 300), (0, 0, 280));
     }
 
@@ -3009,7 +3250,7 @@ mod tests {
 
     #[test]
     fn looks_round_trip() {
-        let look = Look { font: 30, opacity: 0.4, colour: "#a6e3a1".to_string(), mode: Mode::Both, place: Some((10, -20, 640)), height: Some(300), hidden: true, copy: true };
+        let look = Look { font: 30, opacity: 0.4, colour: "#a6e3a1".to_string(), mode: Mode::Both, place: Some((10, -20, 640)), height: Some(300), icon: Some((20, 30)), hidden: true, copy: true };
         assert_eq!(Look::from_json(&look.to_json()), look);
         assert_eq!(Look::from_json(&json!({"font": 500, "mode": "?", "place": [1, 2]})), Look::default());
     }
@@ -3021,6 +3262,8 @@ mod tests {
         assert_eq!((old.font, old.opacity, old.colour.as_str()), (30, OPACITY, COLOUR));
         assert_eq!(old.place, Some((1, 2, 300)));
         assert!(old.height.is_none());
+        assert!(old.icon.is_none());
+        assert!(Look::from_json(&json!({"icon": [1]})).icon.is_none());
         assert!(Look::from_json(&json!({"height": 20})).height.is_none());
         let wrong = Look::from_json(&json!({"opacity": 0.0, "colour": "red; } * { display: none"}));
         assert_eq!((wrong.opacity, wrong.colour.as_str()), (OPACITY, COLOUR));

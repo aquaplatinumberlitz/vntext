@@ -137,24 +137,27 @@ impl Script {
             }
         };
         p.scan(false, &mut collect).ok()?;
-        if let Some(script) = Script::from_candidates(p, candidates) {
-            return Some(script);
+        let resident = Script::from_candidates(p, candidates);
+        if resident.as_ref().is_some_and(|script| script.home.1 != 0) {
+            return resident;
         }
         let mut candidates = Vec::new();
-        p.scan_shared(|_| true, |base, data, limit, m| {
+        let _ = p.scan_shared(|_| true, |base, data, limit, m| {
             for off in finder.find_iter(data).take_while(|off| *off < limit) {
                 if let Some(size) = data.get(off + 4..off + 8) {
                     let size = u32::from_le_bytes(size.try_into().unwrap()) as usize;
                     candidates.push((base + off as u64, size, (m.dev.clone(), m.inode)));
                 }
             }
-        }).ok()?;
-        let script = Script::from_candidates(p, candidates)?;
+        });
+        let Some(script) = Script::from_candidates(p, candidates) else { return resident };
         eprintln!("scenario recovered from allocated shared memory: {}", script.layout.game);
         Some(script)
     }
 
-    fn from_candidates(p: &Proc, candidates: Vec<(u64, usize, (String, u64))>) -> Option<Script> {
+    fn from_candidates(p: &Proc, mut candidates: Vec<(u64, usize, (String, u64))>) -> Option<Script> {
+        // A heap copy decodes correctly but cannot locate the VM in guest shared memory.
+        candidates.sort_by_key(|(_, _, (_, inode))| *inode == 0);
         for (addr, size, home) in candidates {
             if !(0x1000..=512 << 20).contains(&size) {
                 continue;
@@ -211,13 +214,29 @@ impl Script {
     fn locate_live(&self, p: &Proc) -> Vec<u64> {
         let mut cells = Vec::new();
         let _ = p.page_heads(|m| self.at_home(m), LIVE_CELL as usize + 4, |page, head| {
-            let word = |at: usize| u32::from_le_bytes(head[at..at + 4].try_into().unwrap());
-            let waiting_on = self.by_start.get(&word(LIVE_CELL as usize)).map(|i| self.messages[*i].end);
-            if waiting_on == Some(word(LIVE_CELL as usize - 8)) {
+            if self.live_head(head) {
                 cells.push(page + LIVE_CELL);
             }
         });
+        if cells.is_empty() {
+            // The scenario may be resident while the VM's aliases have lost their PTEs.
+            // Search allocated backing extents with exactly the same live-state check.
+            let _ = p.scan_shared(|m| self.at_home(m), |base, data, limit, _| {
+                let first = ((4096 - base % 4096) % 4096) as usize;
+                for offset in (first..limit).step_by(4096) {
+                    if data.get(offset..offset + LIVE_CELL as usize + 4).is_some_and(|head| self.live_head(head)) {
+                        cells.push(base + offset as u64 + LIVE_CELL);
+                    }
+                }
+            });
+        }
         cells
+    }
+
+    fn live_head(&self, head: &[u8]) -> bool {
+        let word = |at: usize| u32::from_le_bytes(head[at..at + 4].try_into().unwrap());
+        let waiting_on = self.by_start.get(&word(LIVE_CELL as usize)).map(|i| self.messages[*i].end);
+        waiting_on == Some(word(LIVE_CELL as usize - 8))
     }
 
     /// The message a position cell currently points at, if any.
@@ -266,6 +285,112 @@ impl Engine for Script {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{FileExt, MetadataExt};
+
+    #[test]
+    fn guest_scenario_precedes_a_valid_anonymous_copy() {
+        let mut guest = b"SNR \0\0\0\0".to_vec();
+        for id in 0..MIN_MESSAGES as u32 {
+            guest.extend_from_slice(&[MSGSET, id as u8, (id >> 8) as u8, (id >> 16) as u8, 0, 7, 0]);
+            guest.extend_from_slice(b"@rtest\0");
+        }
+        guest.resize(4096, 0);
+        let size = guest.len();
+        guest[4..8].copy_from_slice(&(size as u32).to_le_bytes());
+        let copy = guest.clone();
+        let p = Proc::open(std::process::id()).unwrap();
+        let guest_home = ("00:1a".to_string(), 42);
+        let candidate = || (copy.as_ptr() as u64, size, ("00:00".to_string(), 0));
+        let script = Script::from_candidates(&p, vec![candidate(), (guest.as_ptr() as u64, size, guest_home.clone())]).unwrap();
+        assert_eq!(script.home, guest_home, "A native heap copy cannot be used as the VM's home");
+        assert_eq!(script.len(), MIN_MESSAGES);
+        assert_eq!(Script::from_candidates(&p, vec![candidate()]).unwrap().home.1, 0, "Standalone processes still need the anonymous-memory path");
+    }
+
+    #[test]
+    fn reopening_recovers_current_position_without_resident_aliases() {
+        let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path = format!("/dev/shm/vntext-shin-test-{}-{unique}", std::process::id());
+        let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let length = 16 * 4096;
+        file.set_len(length as u64).unwrap();
+        let write = |page: u64, start: u32, end: u32| {
+            file.write_at(&end.to_le_bytes(), page + LIVE_CELL - 8).unwrap();
+            file.write_at(&start.to_le_bytes(), page + LIVE_CELL).unwrap();
+        };
+        write(2 * 4096, 0x80, 0x90);
+        write(9 * 4096, 0x80, 0x91); // A copy with the wrong program counter must not be trusted.
+        let meta = file.metadata().unwrap();
+        let address = unsafe { libc::mmap(std::ptr::null_mut(), length, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, file.as_raw_fd(), 0) };
+        assert_ne!(address, libc::MAP_FAILED);
+        struct Mapped(*mut libc::c_void, usize);
+        impl Drop for Mapped { fn drop(&mut self) { unsafe { libc::munmap(self.0, self.1); } } }
+        let _mapped = Mapped(address, length);
+        let script = Script {
+            messages: vec![Message { start: 0x80, end: 0x90, text: "@r例一".to_string() }, Message { start: 0x100, end: 0x110, text: "@r例二".to_string() }],
+            by_start: HashMap::from([(0x80, 0), (0x100, 1)]), size: 4096, layout: &LAYOUTS[0],
+            home: (format!("{:02x}:{:02x}", libc::major(meta.dev()), libc::minor(meta.dev())), meta.ino()),
+        };
+        let expected = address as u64 + 2 * 4096 + LIVE_CELL;
+        for index in 0..2 {
+            let p = Proc::open(std::process::id()).unwrap();
+            let mut resident = 0;
+            p.page_heads(|m| script.at_home(m), 20, |_, _| resident += 1).unwrap();
+            assert_eq!(resident, 0, "Reopening must not depend on the game's mappings having PTEs");
+            let found = script.locate(&p, false);
+            assert_eq!(found.cells.len(), 1);
+            assert_eq!(found.cells[0].addr, expected);
+            assert!(found.cells[0].trusted);
+            assert_eq!(script.read(&p, expected), Some(index));
+            assert_eq!(file.metadata().unwrap().blocks(), meta.blocks(), "The sparse holes must stay unallocated");
+            write(2 * 4096, 0x100, 0x110);
+            assert_eq!(unsafe { libc::madvise(address, length, libc::MADV_DONTNEED) }, 0);
+        }
+    }
+
+    /// Optional read-only diagnosis; reports positions, never game dialogue.
+    #[test]
+    #[ignore]
+    fn live_position() {
+        let pid: u32 = std::env::var("VNTEXT_SHIN_PID").expect("Set the running game's PID explicitly").parse().unwrap();
+        let p = Proc::open(pid).unwrap();
+        let script = Script::find(&p).expect("A loaded shin scenario is required");
+        eprintln!("scenario_home={}:{} size={}", script.home.0, script.home.1, script.size);
+        for m in crate::mem::read_maps(pid).unwrap().iter().filter(|m| script.at_home(m)).take(4) {
+            eprintln!("home_mapping={:x}-{:x} {} offset={} path={}", m.start, m.end, m.perms, m.offset, m.path);
+        }
+        let mut resident = 0;
+        p.page_heads(|m| script.at_home(m), LIVE_CELL as usize + 4, |_, head| {
+            resident += usize::from(script.live_head(head));
+        }).unwrap();
+        let started = std::time::Instant::now();
+        let positions = script.locate(&p, false);
+        eprintln!("profile={} passages={} resident_live={} recovered_live={} locate_ms={}",
+                  script.layout.game, script.len(), resident, positions.cells.len(), started.elapsed().as_millis());
+        for cell in positions.cells {
+            eprintln!("position={:x} trusted={} readable={}", cell.addr, cell.trusted, script.read(&p, cell.addr).is_some());
+        }
+        let finder = memmem::Finder::new(MAGIC);
+        let mut candidates = Vec::new();
+        let stats = p.scan_shared(|_| true, |base, data, limit, m| {
+            for off in finder.find_iter(data).take_while(|off| *off < limit) {
+                if let Some(bytes) = data.get(off + 4..off + 8) {
+                    candidates.push((base + off as u64, u32::from_le_bytes(bytes.try_into().unwrap()) as usize, (m.dev.clone(), m.inode)));
+                }
+            }
+        }).unwrap();
+        eprintln!("shared_scan_maps={} shared_scan_bytes={} candidates={}", stats.maps, stats.bytes, candidates.len());
+        if let Some(shared) = Script::from_candidates(&p, candidates) {
+            eprintln!("shared_scenario_home={}:{} size={} passages={} layout={}", shared.home.0, shared.home.1, shared.size, shared.len(), shared.layout.game);
+            let found = shared.locate(&p, true);
+            eprintln!("shared_positions={} trusted={}", found.cells.len(), found.cells.iter().filter(|c| c.trusted).count());
+            for cell in found.cells.iter().take(8) {
+                eprintln!("shared_position={:x} trusted={} index={:?}", cell.addr, cell.trusted, shared.read(&p, cell.addr));
+            }
+        }
+    }
 
     #[test]
     fn message_parts() {

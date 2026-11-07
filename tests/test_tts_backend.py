@@ -6,6 +6,11 @@ import tempfile
 import threading
 import time
 import struct
+import os
+import hashlib
+import http.client
+import io
+import wave
 import unittest
 from unittest.mock import patch
 
@@ -13,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'integrations/aivoice2'))
 sys.path.append('/home/admin/aivoice2-re/src/daemon')
 from scheduler import Scheduler, Busy
+from wav_cache import WavCache
 import server
 
 
@@ -129,6 +135,137 @@ class CacheAndWarm(unittest.TestCase):
         with patch.object(self.engine, 'read_exact', return_value=struct.pack('<iI', -2000, 65538)):
             with self.assertRaises(RuntimeError):
                 self.engine.read_reply()
+
+    def test_http_wav_and_cached_pcm_are_leased_through_delivery(self):
+        audio = io.BytesIO()
+        with wave.open(audio, 'wb') as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(48000)
+            wav.writeframes(b'\x01\x00\x02\x00')
+        data = audio.getvalue()
+        _, _, output = self.engine.request('synthetic', 'v')
+        self.engine.cache.limit = 1  # Even a single response exceeds the quota.
+
+        def cached(*args):
+            self.assertGreater(self.engine.cache.held[output], 0)
+            self.engine.cache.prune()
+            self.assertTrue(output.exists())
+            return output, True, {'queue_ms': 0}
+
+        with patch.object(server, 'engine', self.engine), patch.object(server, 'CONFIG', SimpleNamespace(default_voice='v')), \
+             patch.object(self.engine, 'speak', side_effect=cached):
+            http_server = server.ThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+            thread = threading.Thread(target=http_server.serve_forever, kwargs={'poll_interval': .01})
+            thread.start()
+            try:
+                for endpoint in ['/v1/speak', '/v1/speak/stream']:
+                    with self.subTest(endpoint=endpoint):
+                        output.write_bytes(data)
+                        client = http.client.HTTPConnection('127.0.0.1', http_server.server_port, timeout=3)
+                        try:
+                            client.request('POST', endpoint, body=b'{"text":"synthetic","voice":"v"}', headers={'Content-Type': 'application/json'})
+                            response = client.getresponse()
+                            self.assertEqual(response.status, 200)
+                            body = response.read()
+                        finally:
+                            client.close()
+                        if endpoint == '/v1/speak':
+                            self.assertEqual(body, data)
+                        else:
+                            self.assertTrue(body.startswith(b'AVS1'))
+                            self.assertEqual(body[4:9], struct.pack('<BI', 1, 4))
+                            self.assertEqual(body[9:13], b'\x01\x00\x02\x00')
+                            self.assertEqual(body[13], 2)
+                        until = time.monotonic() + 1
+                        while output.exists() and time.monotonic() < until:
+                            time.sleep(.005)
+                        self.assertFalse(output.exists(), 'Quota must be enforced once delivery releases the file')
+            finally:
+                http_server.shutdown()
+                http_server.server_close()
+                thread.join(2)
+
+
+class DiskCache(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.cache = WavCache(self.root, limit=12, max_age=100)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def wav(self, name, size=6, age=0):
+        path = self.root / f'aivoice2_{hashlib.sha256(name.encode()).hexdigest()}.wav'
+        path.write_bytes(b'a' * size)
+        used = time.time() - age
+        os.utime(path, (used, used))
+        return path
+
+    def test_eviction_uses_last_hit_after_cache_is_reopened(self):
+        old = self.wav('old', age=50)
+        recent = self.wav('recent', age=10)
+        self.assertTrue(self.cache.hit(old))
+        self.wav('new')
+        # Last-use timestamps survive a service restart, without an in-memory index.
+        restarted = WavCache(self.root, limit=12, max_age=100)
+        self.assertEqual(restarted.prune()['bytes'], 12)
+        self.assertTrue(old.exists())
+        self.assertFalse(recent.exists())
+
+    def test_expiry_does_not_touch_unowned_files_directories_or_symlinks(self):
+        expired = self.wav('expired', age=200)
+        current = self.wav('current')
+        outside = self.root / 'anki-media.wav'
+        outside.write_bytes(b'keep')
+        temporary = self.root / 'temporary.wav'
+        temporary.write_bytes(b'keep')
+        link = self.root / ('aivoice2_' + 'a' * 64 + '.wav')
+        link.symlink_to(outside)
+        directory = self.root / ('aivoice2_' + 'b' * 64 + '.wav')
+        directory.mkdir()
+        self.assertEqual(self.cache.prune()['removed'], 1)
+        self.assertFalse(expired.exists())
+        self.assertTrue(current.exists() and link.is_symlink() and directory.is_dir())
+        self.assertEqual(outside.read_bytes(), b'keep')
+        self.assertEqual(temporary.read_bytes(), b'keep')
+
+    def test_concurrent_cleanup_keeps_active_output_until_last_lease_closes(self):
+        active = self.wav('active', size=16, age=200)
+        with self.cache.hold(active):
+            with self.cache.hold(active):
+                cleaner = threading.Thread(target=self.cache.prune)
+                cleaner.start()
+                cleaner.join(2)
+                self.assertFalse(cleaner.is_alive())
+                self.assertTrue(active.exists())
+                self.assertTrue(self.cache.summary()['deferred'])
+            self.assertTrue(active.exists())
+        self.assertFalse(active.exists())
+        self.assertEqual(self.cache.summary()['bytes'], 0)
+        self.assertFalse(self.cache.held)
+
+    def test_publish_protects_new_output_and_removes_old_wav(self):
+        old = self.wav('old', size=8, age=20)
+        output = self.root / ('aivoice2_' + 'c' * 64 + '.wav')
+        temporary = self.root / 'in-flight.wav'
+        temporary.write_bytes(b'new audio')
+        with self.cache.hold(output):
+            self.cache.publish(temporary, output)
+            self.assertEqual(output.read_bytes(), b'new audio')
+            self.assertFalse(old.exists())
+        self.assertFalse(temporary.exists())
+        self.assertEqual(self.cache.summary()['bytes'], 9)
+
+    def test_hit_of_missing_file_does_not_create_it_and_failed_consumer_releases_lease(self):
+        output = self.root / ('aivoice2_' + 'd' * 64 + '.wav')
+        self.assertFalse(self.cache.hit(output))
+        self.assertFalse(output.exists())
+        with self.assertRaises(RuntimeError):
+            with self.cache.hold(output):
+                raise RuntimeError('Consumer disconnected')
+        self.assertFalse(self.cache.held)
 
 
 if __name__ == '__main__':
