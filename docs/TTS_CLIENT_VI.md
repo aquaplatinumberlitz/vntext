@@ -2,8 +2,9 @@
 
 Backend/API chỉ duy trì ở [aivoice2api](https://github.com/aquaplatinumberlitz/aivoice2api).
 Cài runtime và kiểm mẫu WAV theo [CONNECT_VI](https://github.com/aquaplatinumberlitz/aivoice2api/blob/main/docs/CONNECT_VI.md)
-trước khi tìm lỗi overlay/player. Bộ cài nằm ở repo Anki; Anki không cần
-mở để vntext phát tiếng.
+trước khi tìm lỗi overlay/player. Bộ cài Anki 0.3.0 đã kèm backend mới;
+chạy start-setup.sh dùng ngay, không cần compose hoặc cài service riêng
+cho vntext. Anki không cần mở để vntext phát tiếng.
 
 ## Nối backend đã có
 
