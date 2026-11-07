@@ -217,6 +217,9 @@ tab Giọng đọc.
 
 ### Nghe tiếng Nhật bằng A.I.VOICE2
 
+Dev mới: đọc [hướng dẫn nối A.I.VOICE2 với Anki/vntext](docs/AIVOICE2_CONNECT_VI.md)
+để cài runtime chung, tìm đúng URL/service, kiểm WAV và nâng cấp backend có rollback.
+
 Chuẩn bị audio giữ tối đa một đoạn kế tiếp để hạn chế đoán nhầm nhánh truyện.
 Cache nghe lại trong RAM có quota 32 MiB, cửa sổ tái dùng 120 giây. WAV cache
 backend có quota 512 MiB và tự dọn file không dùng 7 ngày; file đang tạo/đọc

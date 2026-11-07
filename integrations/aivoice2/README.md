@@ -1,5 +1,7 @@
 # Backend A.I.VOICE2 cho vntext và Anki
 
+Dev mới: bắt đầu với [hướng dẫn kết nối đầy đủ](../../docs/AIVOICE2_CONNECT_VI.md).
+
 Chủ dự án đã nghiệm thu bản UI/TTS tối ưu và duyệt merge ngày 2026-11-06.
 
 Source nền lấy từ `/home/admin/aivoice2-re/src/daemon/` ngày 2026-11-06;
@@ -15,16 +17,17 @@ Từ thư mục repo vntext:
 mkdir -p target/tts-runtime
 x86_64-w64-mingw32-gcc -Wall -Wextra -Werror -O2 -Wl,--no-insert-timestamp \
   integrations/aivoice2/engine_worker.c -o target/tts-runtime/engine_worker.exe
-PYTHONPATH=/home/admin/aivoice2-re/src/daemon python3 integrations/aivoice2/server.py \
-  --worker target/tts-runtime/engine_worker.exe
 ```
 
-Đây là ví dụ cho máy dev hiện tại. Máy quản lý theo bộ cài phải thêm
-`--config /đường/dẫn/runtime.json`, và PYTHONPATH trỏ tới daemon support
-của bộ cài (runtime_config.py, run_auth_probe.py và dữ liệu liên quan).
+Sau build, triển khai đồng bộ server/worker vào runtime theo mục 8 trong
+hướng dẫn kết nối. Service dùng `runtime/server.py --config ...`, không
+cần chạy server từ checkout. `--worker` chỉ dành cho config/prefix dev riêng:
+đổi runtime_dir trên prefix đã map R: sang đích khác sẽ bị từ chối.
+Nếu chạy source trực tiếp với config dev, PYTHONPATH phải trỏ tới daemon
+support của bộ cài (runtime_config.py, run_auth_probe.py và dữ liệu liên quan).
 Không chạy hai service trên cùng port/prefix. Worker mới và server mới phải
 đi cùng nhau: server bật `AIVOICE2_WORKER_METRICS=1`, worker cũ không có
-giao thức timing/chunk này. Worker gốc không bị chép đè.
+giao thức timing/chunk này. Giữ backup đồng bộ trước khi thay runtime đã cài.
 
 Test không dùng engine thật:
 
@@ -96,39 +99,39 @@ vụ nghe lại; audio chuẩn bị trước hiện được giữ ở WAV cache
 RAM quota riêng không làm tăng lookahead. 120 giây là điều kiện tái dùng;
 không có timer RAM riêng để giải phóng ngay lúc hết hạn.
 
-## Service trên máy này và quay lại bản cũ
+## Runtime chung trên máy này (2026-11-07)
 
-Đang có drop-in riêng:
-`~/.config/systemd/user/aivoice2-tts.service.d/50-vntext-latency.conf`.
-Sau merge, ExecStart trỏ source trong `/home/admin/Projects/vntext` (main)
-và worker dưới `target/tts-runtime` của cùng checkout;
-PYTHONPATH trỏ daemon support gốc. Port vẫn 17862, dùng dữ liệu và prefix
-đã cài. Source/binary worker gốc trong aivoice2-re giữ nguyên.
+Anki và vntext cùng dùng **http://127.0.0.1:17863**. Một service duy nhất:
+`aivoice2-local-df97fb54247a.service`; app, Voice, Lang, prefix và config nằm
+trong `~/.local/share/aivoice2-local`. Không còn phụ thuộc thư mục nghiên cứu
+`/home/admin/aivoice2-re`. Runtime được triển khai từ source tích hợp vntext,
+không cần mở vntext hoặc Anki để service sẵn sàng.
 
-Muốn rollback, đóng client đang phát rồi:
+Source `server.py` nhận `--config` và dùng worker trong runtime_dir của
+config; `--worker` là override tùy chọn cho dev. Vì vậy service do manager
+sinh lại bằng runtime_cli vẫn gọi được bản streaming/cache quota mới.
+Anki giữ nguyên endpoint 17863; vntext đã được chuyển từ 17862 sang 17863.
 
-```bash
-systemctl --user stop aivoice2-tts
-python3 - <<'PY'
-from pathlib import Path
-link = Path('/home/admin/aivoice2-re/wineprefix/dosdevices/r:')
-owned = {
-    Path('/home/admin/Projects/vntext/target/tts-runtime').resolve(),
-    Path('/home/admin/Projects/vntext-uiux/target/tts-runtime').resolve(),
-}
-original = Path('/home/admin/aivoice2-re/src/daemon/build').resolve()
-if not link.is_symlink() or link.resolve() not in owned | {original}:
-    raise SystemExit('Runtime alias không thuộc bản đã thiết lập; kiểm tra trước khi đổi.')
-if link.resolve() != original:
-    link.unlink()
-    link.symlink_to(original, target_is_directory=True)
-PY
-rm ~/.config/systemd/user/aivoice2-tts.service.d/50-vntext-latency.conf
-systemctl --user daemon-reload
-systemctl --user restart aivoice2-tts
-```
+Đợt chuyển có backup file runtime/manifest trước nâng cấp và receipt hash
+trong `backups/integration/shared-tts-*/`. Hash install-manifest được cập
+nhật theo đúng các file được nâng cấp có chủ đích; không sửa hash để che
+lỗi file. Dùng `runtime_cli.py --config ... verify-files` để kiểm tra.
 
-Ví dụ này chỉ dành cho máy dev có đường dẫn/prefix nêu trên. Alias R: phải
-được trả về thư mục worker gốc; loader cố ý không tự ghi đè alias khác đích.
-Chỉ bỏ drop-in này, không dùng `systemctl revert` vì có thể xóa cấu hình
-khác của người dùng. vntext sẽ dùng lại đường WAV tương thích.
+Các unit `aivoice2-tts.service` cũ và `aivoice2-local-e99b93850a9a.service`
+thử đã dừng và bỏ tự khởi động. Giữ shortcut bản Anki chính và quản lý;
+xóa các shortcut thử/trùng. Bản Editor Wine cá nhân ở `~/.wine-aivoice`
+không bị xóa.
+
+Để rollback, dừng service chính, khôi phục đồng bộ server/worker và các
+manifest từ cùng thư mục backup migration rồi khởi động lại service. Bản
+cũ chỉ có WAV, vntext tự lùi về giao thức đó. Không chạy worker mới với
+server cũ hoặc ngược lại; không dùng lại unit/prefix trong thư mục nghiên
+cứu đã xóa.
+
+Bộ bàn giao 0.2.0 cùng checksum/QA được giữ ở
+`~/Downloads/aivoice2-handover/`; bên trong archive có developer-kit và tài
+liệu RE. Gói này giữ bản phát hành Anki cũ, không tự bao gồm cập nhật
+streaming/cache quota riêng của vntext.
+
+Tests backend lấy runtime support tại `~/.local/share/aivoice2-local/runtime`
+hoặc biến `AIVOICE2_SUPPORT_DIR`; không yêu cầu đường dẫn nghiên cứu cũ.
